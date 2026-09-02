@@ -1,0 +1,101 @@
+import { StyleSheet } from 'react-native';
+
+
+export const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#121212',
+  },
+  conteudo: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+  },
+  estadoCentralizado: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#121212',
+  },
+  textoEstado: {
+    color: '#BDBDBD',
+    fontFamily: 'Poppins_400Regular',
+    fontSize: 12,
+    marginTop: 10,
+  },
+  iconeTopo: {
+    width: 58,
+    height: 58,
+    alignSelf: 'center',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 29,
+    borderWidth: 1,
+    borderColor: '#E91E63',
+    backgroundColor: 'rgba(233, 30, 99, 0.08)',
+    marginBottom: 18,
+  },
+  titulo: {
+    color: '#FFFFFF',
+    fontFamily: 'Poppins_600SemiBold',
+    fontSize: 22,
+    textAlign: 'center',
+  },
+  subtitulo: {
+    color: '#BDBDBD',
+    fontFamily: 'Poppins_400Regular',
+    fontSize: 13,
+    lineHeight: 19,
+    textAlign: 'center',
+    marginTop: 6,
+    marginBottom: 28,
+  },
+  campoContainer: {
+    width: '100%',
+    height: 52,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: '#181818',
+    borderColor: '#424242',
+    borderRadius: 10,
+    borderWidth: 1,
+    marginBottom: 14,
+    paddingHorizontal: 14,
+  },
+  campo: {
+    flex: 1,
+    height: '100%',
+    color: '#FFFFFF',
+    fontFamily: 'Poppins_400Regular',
+    fontSize: 13,
+  },
+  botaoSalvar: {
+    width: '100%',
+    marginTop: 10,
+    borderRadius: 26,
+    overflow: 'hidden',
+  },
+  degradeBotao: {
+    width: '100%',
+    height: 50,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 26,
+  },
+  textoBotao: {
+    color: '#FFFFFF',
+    fontFamily: 'Poppins_600SemiBold',
+    fontSize: 14,
+  },
+  botaoVoltar: {
+    alignSelf: 'center',
+    marginTop: 8,
+    padding: 12,
+  },
+  textoVoltar: {
+    color: '#E91E63',
+    fontFamily: 'Poppins_600SemiBold',
+    fontSize: 12,
+  },
+});
