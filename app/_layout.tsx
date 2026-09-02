@@ -1,5 +1,7 @@
 // Define a estrutura geral e a navegação do aplicativo com Expo Router
 
+import { useEffect, useState } from 'react';
+
 import {
   Poppins_400Regular,
   Poppins_500Medium,
@@ -21,11 +23,12 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { supabase } from '../lib/supabase';
 import { styles } from '../styles/_layout.styles';
 
 type RotaPrincipal =
   | '/inicio'
-  | '/busca'
+  | '/calendario'
   | '/minha-lista'
   | '/perfil';
 
@@ -42,10 +45,10 @@ const itensBarra: {
     iconeAtivo: 'home',
   },
   {
-    rota: '/busca',
-    titulo: 'Explorar',
-    icone: 'search-outline',
-    iconeAtivo: 'search',
+    rota: '/calendario',
+    titulo: 'Calendário',
+    icone: 'calendar-outline',
+    iconeAtivo: 'calendar',
   },
   {
     rota: '/minha-lista',
@@ -65,6 +68,7 @@ export default function RootLayout() {
   const router = useRouter();
   const pathname = usePathname();
   const insets = useSafeAreaInsets();
+  const [verificandoSessao, setVerificandoSessao] = useState(true);
 
   const [fontesCarregadas] = useFonts({
     Poppins_400Regular,
@@ -73,7 +77,55 @@ export default function RootLayout() {
     Poppins_700Bold,
   });
 
-  if (!fontesCarregadas) {
+  useEffect(() => {
+    let ativo = true;
+
+    async function verificarSessao() {
+      try {
+        const { data } = await supabase.auth.getSession();
+
+        if (!ativo) return;
+
+        const sessao = data.session;
+
+        if (sessao && pathname === '/') {
+          router.replace('/inicio');
+        }
+
+        if (
+          !sessao &&
+          pathname !== '/' &&
+          pathname !== '/cadastro' &&
+          pathname !== '/redefinir-senha'
+        ) {
+          router.replace('/');
+        }
+      } finally {
+        if (ativo) {
+          setVerificandoSessao(false);
+        }
+      }
+    }
+
+    verificarSessao();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_evento, sessao) => {
+      if (!ativo) return;
+
+      if (sessao && pathname === '/') {
+        router.replace('/inicio');
+      }
+    });
+
+    return () => {
+      ativo = false;
+      subscription.unsubscribe();
+    };
+  }, [pathname, router]);
+
+  if (!fontesCarregadas || verificandoSessao) {
     return (
       <View style={styles.carregamento}>
         <ActivityIndicator

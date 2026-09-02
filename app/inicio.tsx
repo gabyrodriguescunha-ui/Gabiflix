@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Dimensions,
+  Image,
   ImageBackground,
   ScrollView,
   Text,
@@ -26,9 +27,15 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { supabase } from '../lib/supabase';
 // Serviço responsável por buscar as séries e imagens no TMDB
 import {
-  buscarLancamentosRecentes,
+  buscarHistoricoAssistido,
+  type RegistroEpisodioAssistido,
+} from '../services/episodios-assistidos.service';
+import { buscarMinhaLista } from '../services/minha-lista.service';
+import {
+  buscarDetalhesSerie,
+  buscarDetalhesTemporada,
   buscarSeriesEmAlta,
-  buscarSeriesPopulares,
+  obterUrlCapa,
   obterUrlFundo,
 } from '../services/tmdb.service';
 // Tipo utilizado para representar uma série
@@ -41,8 +48,25 @@ import { styles } from '../styles/inicio.styles';
 import { Cabecalho } from '../components/cabecalho/Cabecalho';
 // Menu aberto pelo ícone de hambúrguer
 import { MenuLateral } from '../components/menu-lateral/MenuLateral';
-// Card utilizado para exibir cada série popular
-import { CardSerie } from '../components/card-serie/CardSerie';
+
+interface ItemContinuarHome {
+  serieId: number;
+  nome: string;
+  posterPath: string | null;
+  temporadaNumero: number;
+  proximoEpisodioNumero: number;
+  quantidadeAssistida: number;
+  totalEpisodios: number;
+}
+
+function episodioFoiLancado(data: string | null): boolean {
+  if (!data) return false;
+  const [ano, mes, dia] = data.split('-').map(Number);
+  const dataEpisodio = new Date(ano, mes - 1, dia);
+  const hoje = new Date();
+  hoje.setHours(0, 0, 0, 0);
+  return dataEpisodio <= hoje;
+}
 
 // Página principal do aplicativo
 export default function Inicio() {
@@ -73,11 +97,8 @@ export default function Inicio() {
   // Guarda as séries que estão em tendência durante a semana
   const [seriesEmAlta, setSeriesEmAlta] = useState<Serie[]>([]);
 
-  // Guarda as séries que estrearam recentemente
-  const [lancamentosRecentes, setLancamentosRecentes] = useState<Serie[]>([]);
-
-  // Guarda as séries populares recebidas do TMDB
-  const [seriesPopulares, setSeriesPopulares] = useState<Serie[]>([]);
+  // Séries com episódio lançado ainda não assistido.
+  const [continuarHome, setContinuarHome] = useState<ItemContinuarHome[]>([]);
   // Controla o carregamento dos dados do TMDB
   const [carregandoSeries, setCarregandoSeries] = useState(true);
   // Guarda uma mensagem caso a requisição apresente erro
@@ -130,11 +151,9 @@ export default function Inicio() {
     };
   }, []);
 
-  // Busca as séries somente depois de confirmar a sessão do usuário
+  // Busca somente o necessário para a Home.
   useEffect(() => {
-    if (!sessaoValida) {
-      return;
-    }
+    if (!sessaoValida) return;
 
     let telaAtiva = true;
 
@@ -143,37 +162,20 @@ export default function Inicio() {
         setCarregandoSeries(true);
         setErroSeries('');
 
-        // Carrega as três seções da página ao mesmo tempo
-        const [
-          respostaEmAlta,
-          respostaLancamentos,
-          respostaPopulares,
-        ] = await Promise.all([
-          buscarSeriesEmAlta(),
-          buscarLancamentosRecentes(),
-          buscarSeriesPopulares(),
-        ]);
+        const respostaEmAlta = await buscarSeriesEmAlta();
 
         if (telaAtiva) {
           setSeriesEmAlta(respostaEmAlta.results);
-          setLancamentosRecentes(respostaLancamentos.results);
-          setSeriesPopulares(respostaPopulares.results);
         }
       } catch (erro) {
-        console.log('Erro ao buscar séries:', erro);
+        console.log('Erro ao buscar séries em alta:', erro);
 
         if (telaAtiva) {
           setSeriesEmAlta([]);
-          setLancamentosRecentes([]);
-          setSeriesPopulares([]);
-          setErroSeries(
-            'Não foi possível carregar as séries do TMDB.'
-          );
+          setErroSeries('Não foi possível carregar as séries do TMDB.');
         }
       } finally {
-        if (telaAtiva) {
-          setCarregandoSeries(false);
-        }
+        if (telaAtiva) setCarregandoSeries(false);
       }
     }
 
@@ -183,6 +185,103 @@ export default function Inicio() {
       telaAtiva = false;
     };
   }, [sessaoValida, tentativaSeries]);
+
+  // Prepara os cards pessoais de Continuar assistindo.
+  useEffect(() => {
+    if (!sessaoValida) return;
+
+    let telaAtiva = true;
+
+    async function carregarContinuarAssistindo() {
+      try {
+        const [historico, minhaLista] = await Promise.all([
+          buscarHistoricoAssistido(),
+          buscarMinhaLista(),
+        ]);
+
+        const idsAcompanhadas = new Set(
+          minhaLista
+            .filter(
+              (item) =>
+                item.status_usuario === 'assistindo' ||
+                item.status_usuario === 'reassistindo'
+            )
+            .map((item) => item.serie_id)
+        );
+
+        const registrosPorSerie = new Map<number, RegistroEpisodioAssistido[]>();
+
+        historico.forEach((registro) => {
+          if (!idsAcompanhadas.has(registro.serie_id)) return;
+          const atuais = registrosPorSerie.get(registro.serie_id) ?? [];
+          atuais.push(registro);
+          registrosPorSerie.set(registro.serie_id, atuais);
+        });
+
+        const resultados = await Promise.all(
+          Array.from(registrosPorSerie.entries()).map(async ([serieId, registros]) => {
+            try {
+              const detalhes = await buscarDetalhesSerie(serieId);
+              const idsAssistidos = new Set(registros.map((registro) => registro.episodio_id));
+
+              const temporadas = detalhes.seasons
+                .filter((temporada) => temporada.season_number > 0 && temporada.episode_count > 0)
+                .sort((a, b) => a.season_number - b.season_number);
+
+              for (const temporada of temporadas) {
+                const detalhesTemporada = await buscarDetalhesTemporada(
+                  serieId,
+                  temporada.season_number
+                );
+
+                const proximo = detalhesTemporada.episodes.find(
+                  (episodio) =>
+                    !idsAssistidos.has(episodio.id) &&
+                    episodioFoiLancado(episodio.air_date)
+                );
+
+                if (proximo) {
+                  const assistidosNaTemporada = registros.filter(
+                    (registro) => registro.temporada_numero === temporada.season_number
+                  ).length;
+
+                  return {
+                    serieId,
+                    nome: detalhes.name,
+                    posterPath: detalhes.poster_path,
+                    temporadaNumero: temporada.season_number,
+                    proximoEpisodioNumero: proximo.episode_number,
+                    quantidadeAssistida: assistidosNaTemporada,
+                    totalEpisodios: detalhesTemporada.episodes.length,
+                  } satisfies ItemContinuarHome;
+                }
+              }
+
+              return null;
+            } catch (erro) {
+              console.log(`Erro ao preparar série ${serieId} na Home:`, erro);
+              return null;
+            }
+          })
+        );
+
+        if (telaAtiva) {
+          setContinuarHome(
+            resultados.filter((item): item is ItemContinuarHome => item !== null).slice(0, 8)
+          );
+        }
+      } catch (erro) {
+        console.log('Erro ao carregar Continuar assistindo na Home:', erro);
+        if (telaAtiva) setContinuarHome([]);
+      }
+    }
+
+    carregarContinuarAssistindo();
+
+    return () => {
+      telaAtiva = false;
+    };
+  }, [sessaoValida]);
 
   // Mantém poucos destaques para o carrossel ficar leve e objetivo.
   const destaquesEmAlta = useMemo(
@@ -281,7 +380,7 @@ export default function Inicio() {
               {erroSeries}
             </Text>
 
-            {/* Refaz as três consultas da página sem exigir que o usuário reinicie o app */}
+            {/* Refaz a consulta da seção Em alta sem exigir reiniciar o app */}
             <TouchableOpacity
               style={{
                 marginTop: 18,
@@ -325,56 +424,90 @@ export default function Inicio() {
               </Text>
             </View>
 
-            {/* Título da seção utilizada para acessar o próximo episódio */}
+            {/* Continuar assistindo aparece primeiro e usa o progresso real da conta */}
             <View style={styles.cabecalhoSecao}>
-              <Text style={styles.tituloSecao}>
-                Continuar assistindo
-              </Text>
+              <Text style={styles.tituloSecao}>Continuar assistindo</Text>
 
               <TouchableOpacity
                 activeOpacity={0.7}
                 onPress={() => router.push('/continuar-assistindo')}
               >
-                <Text style={styles.verTudo}>
-                  Ver tudo ›
-                </Text>
+                <Text style={styles.verTudo}>Ver tudo ›</Text>
               </TouchableOpacity>
             </View>
 
-            {/* Atalho para a página que calcula o próximo episódio de cada série */}
-            <TouchableOpacity
-              style={styles.continuarAssistindo}
-              activeOpacity={0.85}
-              onPress={() => router.push('/continuar-assistindo')}
-            >
-              {/* Ícone destacado utilizado como referência para continuar a reprodução */}
-              <View style={styles.continuarIcone}>
-                <Ionicons
-                  name="play"
-                  size={19}
-                  color="#FFFFFF"
-                />
-              </View>
+            {continuarHome.length > 0 ? (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.listaContinuar}
+              >
+                {continuarHome.map((item) => {
+                  const urlCapa = obterUrlCapa(item.posterPath);
+                  const percentual = item.totalEpisodios
+                    ? Math.min(
+                        (item.quantidadeAssistida / item.totalEpisodios) * 100,
+                        100
+                      )
+                    : 0;
 
-              {/* Explica rapidamente o objetivo do atalho */}
-              <View style={styles.continuarConteudo}>
-                <Text style={styles.continuarTitulo}>
-                  Retome de onde parou
+                  return (
+                    <TouchableOpacity
+                      key={item.serieId}
+                      style={styles.cardContinuar}
+                      activeOpacity={0.85}
+                      onPress={() =>
+                        router.push({
+                          pathname: '/temporadas/[id]',
+                          params: {
+                            id: String(item.serieId),
+                            temporada: String(item.temporadaNumero),
+                          },
+                        })
+                      }
+                    >
+                      {urlCapa ? (
+                        <Image source={{ uri: urlCapa }} style={styles.capaContinuar} />
+                      ) : (
+                        <View style={[styles.capaContinuar, styles.semCapaContinuar]}>
+                          <Ionicons name="image-outline" size={28} color="#777777" />
+                        </View>
+                      )}
+
+                      <Text style={styles.nomeContinuar} numberOfLines={1}>
+                        {item.nome}
+                      </Text>
+
+                      <Text style={styles.episodioContinuar}>
+                        T{item.temporadaNumero} • E{item.proximoEpisodioNumero}
+                      </Text>
+
+                      <View style={styles.trilhoContinuar}>
+                        <View
+                          style={[
+                            styles.barraContinuar,
+                            { width: `${percentual}%` as `${number}%` },
+                          ]}
+                        />
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            ) : (
+              <TouchableOpacity
+                style={styles.continuarVazio}
+                activeOpacity={0.8}
+                onPress={() => router.push('/continuar-assistindo')}
+              >
+                <Ionicons name="checkmark-circle-outline" size={22} color="#E91E63" />
+                <Text style={styles.textoContinuarVazio}>
+                  Você está em dia com suas séries.
                 </Text>
+              </TouchableOpacity>
+            )}
 
-                <Text style={styles.continuarTexto}>
-                  Veja seu próximo episódio disponível
-                </Text>
-              </View>
-
-              <Ionicons
-                name="chevron-forward"
-                size={21}
-                color="#E91E63"
-              />
-            </TouchableOpacity>
-
-            {/* Título da seção que destaca uma das séries populares */}
+            {/* Em alta permanece como seção de descoberta da Home */}
             <View style={styles.cabecalhoSecao}>
               <Text style={styles.tituloSecao}>
                 Em alta
@@ -608,71 +741,8 @@ export default function Inicio() {
               </>
             )}
 
-            {/* Título da seção que apresenta séries lançadas recentemente */}
-            <View style={styles.cabecalhoSecao}>
-              <Text style={styles.tituloSecao}>
-                Lançamentos recentes
-              </Text>
-
-              <TouchableOpacity
-                activeOpacity={0.7}
-                onPress={() => router.push('/lancamentos')}
-              >
-                <Text style={styles.verTudo}>
-                  Ver tudo ›
-                </Text>
-              </TouchableOpacity>
-            </View>
-
-            {/* Carrossel horizontal com séries que estrearam nos últimos 30 dias */}
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.listaSeries}
-            >
-              {lancamentosRecentes.slice(0, 10).map((serie) => (
-                <CardSerie
-                  key={serie.id}
-                  serie={serie}
-                />
-              ))}
-            </ScrollView>
-
-            {/* Título da seção que mantém o carrossel de séries populares */}
-            <View
-              style={[
-                styles.cabecalhoSecao,
-                styles.cabecalhoPopulares,
-              ]}
-            >
-              <Text style={styles.tituloSecao}>
-                Populares
-              </Text>
-
-              <TouchableOpacity
-                activeOpacity={0.7}
-                onPress={() => router.push('/populares')}
-              >
-                <Text style={styles.verTudo}>
-                  Ver tudo ›
-                </Text>
-              </TouchableOpacity>
-            </View>
-
-            {/* Carrossel horizontal preenchido com as demais séries populares */}
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.listaSeries}
-            >
-              {seriesPopulares.map((serie) => (
-                <CardSerie
-                  key={serie.id}
-                  serie={serie}
-                />
-              ))}
-            </ScrollView>
           </ScrollView>
+
         )}
       </View>
 

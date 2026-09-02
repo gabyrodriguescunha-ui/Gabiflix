@@ -1,10 +1,11 @@
 // PÁGINA QUE EXIBE AS SÉRIES SALVAS PELO USUÁRIO
 
 // Hooks utilizados para carregar novamente a lista ao retornar para a página
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 // Componentes visuais do React Native
 import {
   ActivityIndicator,
+  FlatList,
   Image,
   Modal,
   Pressable,
@@ -29,7 +30,7 @@ import {
   type StatusUsuario,
 } from '../services/minha-lista.service';
 // Monta a URL completa de cada capa do TMDB
-import { obterUrlCapa } from '../services/tmdb.service';
+import { obterUrlCapaPequena } from '../services/tmdb.service';
 // Modal personalizado utilizado nas confirmações do Gabiflix
 import { ModalConfirmacao } from '../components/modal-confirmacao/ModalConfirmacao';
 // Estilos exclusivos desta página
@@ -125,16 +126,18 @@ export default function MinhaLista() {
 
   // Quantidade de séries em cada categoria.
   // O contador considera toda a lista, independentemente do texto pesquisado.
-  const contagemPorFiltro = filtros.reduce(
-    (acumulador, filtro) => {
-      acumulador[filtro.valor] = series.filter(
-        (item) =>
-          item.status_usuario === filtro.valor
-      ).length;
-
-      return acumulador;
-    },
-    {} as Record<FiltroLista, number>
+  const contagemPorFiltro = useMemo(
+    () =>
+      filtros.reduce(
+        (acumulador, filtro) => {
+          acumulador[filtro.valor] = series.filter(
+            (item) => item.status_usuario === filtro.valor
+          ).length;
+          return acumulador;
+        },
+        {} as Record<FiltroLista, number>
+      ),
+    [series]
   );
 
   // Opções apresentadas no menu de ordenação
@@ -142,30 +145,12 @@ export default function MinhaLista() {
     valor: OrdenacaoLista;
     titulo: string;
   }[] = [
-    {
-      valor: 'recentes',
-      titulo: 'Adicionadas recentemente',
-    },
-    {
-      valor: 'antigas',
-      titulo: 'Adicionadas há mais tempo',
-    },
-    {
-      valor: 'nome_az',
-      titulo: 'Nome A–Z',
-    },
-    {
-      valor: 'nome_za',
-      titulo: 'Nome Z–A',
-    },
-    {
-      valor: 'nota_maior',
-      titulo: 'Melhor avaliação',
-    },
-    {
-      valor: 'nota_menor',
-      titulo: 'Pior avaliação',
-    },
+    { valor: 'recentes', titulo: 'Adicionadas recentemente' },
+    { valor: 'antigas', titulo: 'Adicionadas há mais tempo' },
+    { valor: 'nome_az', titulo: 'Nome A–Z' },
+    { valor: 'nome_za', titulo: 'Nome Z–A' },
+    { valor: 'nota_maior', titulo: 'Melhor avaliação' },
+    { valor: 'nota_menor', titulo: 'Pior avaliação' },
   ];
 
   // Normaliza textos para a busca funcionar mesmo sem acentos.
@@ -177,66 +162,34 @@ export default function MinhaLista() {
       .trim();
   }
 
-  // Filtra somente dentro da categoria selecionada.
   const termoBusca = normalizarTexto(textoBusca);
 
-  const seriesFiltradas = series.filter((item) => {
-    if (item.status_usuario !== filtroSelecionado) {
-      return false;
-    }
+  // Filtragem e ordenação só são recalculadas quando algo relevante muda.
+  const seriesOrdenadas = useMemo(() => {
+    const filtradas = series.filter((item) => {
+      if (item.status_usuario !== filtroSelecionado) return false;
+      if (!termoBusca) return true;
+      return normalizarTexto(item.nome).includes(termoBusca);
+    });
 
-    if (!termoBusca) {
-      return true;
-    }
-
-    return normalizarTexto(item.nome).includes(
-      termoBusca
-    );
-  });
-
-  // Ordena uma cópia da lista filtrada para preservar os dados originais
-  const seriesOrdenadas = [...seriesFiltradas].sort(
-    (serieA, serieB) => {
+    return [...filtradas].sort((serieA, serieB) => {
       switch (ordenacaoSelecionada) {
         case 'antigas':
-          return (
-            new Date(serieA.criado_em).getTime() -
-            new Date(serieB.criado_em).getTime()
-          );
-
+          return new Date(serieA.criado_em).getTime() - new Date(serieB.criado_em).getTime();
         case 'nome_az':
-          return serieA.nome.localeCompare(
-            serieB.nome,
-            'pt-BR'
-          );
-
+          return serieA.nome.localeCompare(serieB.nome, 'pt-BR');
         case 'nome_za':
-          return serieB.nome.localeCompare(
-            serieA.nome,
-            'pt-BR'
-          );
-
+          return serieB.nome.localeCompare(serieA.nome, 'pt-BR');
         case 'nota_maior':
-          return (
-            (serieB.nota ?? -1) -
-            (serieA.nota ?? -1)
-          );
-
+          return (serieB.nota ?? -1) - (serieA.nota ?? -1);
         case 'nota_menor':
-          return (
-            (serieA.nota ?? Number.POSITIVE_INFINITY) -
-            (serieB.nota ?? Number.POSITIVE_INFINITY)
-          );
-
+          return (serieA.nota ?? Number.POSITIVE_INFINITY) - (serieB.nota ?? Number.POSITIVE_INFINITY);
         case 'recentes':
         default:
-          return (
-            new Date(serieB.criado_em).getTime() -
-            new Date(serieA.criado_em).getTime()
-          );
+          return new Date(serieB.criado_em).getTime() - new Date(serieA.criado_em).getTime();
       }
-    }
-  );
+    });
+  }, [series, filtroSelecionado, termoBusca, ordenacaoSelecionada]);
 
   // Altera o status no Supabase e atualiza o card sem recarregar a página
   async function alterarStatus(status: StatusUsuario) {
@@ -360,7 +313,7 @@ export default function MinhaLista() {
 
   // Cria um card horizontal para cada registro retornado pelo Supabase
   function renderizarSerie(item: ItemMinhaLista) {
-    const urlCapa = obterUrlCapa(item.poster_path);
+    const urlCapa = obterUrlCapaPequena(item.poster_path);
 
     return (
       <TouchableOpacity
@@ -733,12 +686,17 @@ export default function MinhaLista() {
           </View>
         </View>
       ) : (
-        <ScrollView
+        <FlatList
+          data={seriesOrdenadas}
+          keyExtractor={(item) => String(item.id)}
+          renderItem={({ item }) => renderizarSerie(item)}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.lista}
-        >
-          {seriesOrdenadas.map(renderizarSerie)}
-        </ScrollView>
+          initialNumToRender={6}
+          maxToRenderPerBatch={6}
+          windowSize={7}
+          removeClippedSubviews
+        />
       )}
 
       {/* Menu inferior utilizado para escolher a ordenação da lista */}

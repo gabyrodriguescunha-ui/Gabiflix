@@ -67,50 +67,76 @@ export const styles = StyleSheet.create({
     fontSize: 11,
   },
 
-  // Card utilizado como atalho para a página Continuar assistindo
-  continuarAssistindo: {
-    minHeight: 72,
+  // Carrossel pessoal com as séries que possuem episódio disponível.
+  listaContinuar: {
+    paddingLeft: 20,
+    paddingRight: 8,
+    paddingBottom: 28,
+  },
+
+  cardContinuar: {
+    width: 122,
+    marginRight: 12,
+  },
+
+  capaContinuar: {
+    width: 122,
+    height: 178,
+    borderRadius: 12,
+    backgroundColor: '#242424',
+  },
+
+  semCapaContinuar: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  nomeContinuar: {
+    color: '#FFFFFF',
+    fontFamily: 'Poppins_600SemiBold',
+    fontSize: 11.5,
+    marginTop: 8,
+  },
+
+  episodioContinuar: {
+    color: '#F48FB1',
+    fontFamily: 'Poppins_500Medium',
+    fontSize: 10,
+    marginTop: 2,
+  },
+
+  trilhoContinuar: {
+    height: 4,
+    backgroundColor: '#303030',
+    borderRadius: 2,
+    overflow: 'hidden',
+    marginTop: 7,
+  },
+
+  barraContinuar: {
+    height: '100%',
+    backgroundColor: '#E91E63',
+    borderRadius: 2,
+  },
+
+  continuarVazio: {
+    minHeight: 58,
     marginHorizontal: 20,
     marginBottom: 28,
+    paddingHorizontal: 14,
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#1A1A1A',
     borderWidth: 1,
     borderColor: '#242424',
     borderRadius: 14,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
   },
 
-  // Fundo rosa utilizado no ícone de reprodução
-  continuarIcone: {
-    width: 44,
-    height: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 12,
-    backgroundColor: '#E91E63',
-  },
-
-  // Ocupa o espaço entre o ícone e a seta lateral
-  continuarConteudo: {
-    flex: 1,
-    marginHorizontal: 12,
-  },
-
-  // Texto principal do atalho Continuar assistindo
-  continuarTitulo: {
-    color: '#FFFFFF',
-    fontFamily: 'Poppins_600SemiBold',
-    fontSize: 13,
-  },
-
-  // Explicação apresentada abaixo do título do atalho
-  continuarTexto: {
-    color: '#8D8D8D',
+  textoContinuarVazio: {
+    color: '#BDBDBD',
     fontFamily: 'Poppins_400Regular',
-    fontSize: 10.5,
-    marginTop: 2,
+    fontSize: 11,
+    marginLeft: 9,
   },
 
   // Card horizontal utilizado para destacar uma série em alta
@@ -276,18 +302,6 @@ export const styles = StyleSheet.create({
     fontFamily: 'Poppins_600SemiBold',
     fontSize: 10.5,
     marginLeft: 5,
-  },
-
-  // Cria uma separação maior antes da seção de séries populares
-  cabecalhoPopulares: {
-    marginTop: 28,
-  },
-
-  // Espaçamento lateral do carrossel
-  listaSeries: {
-    paddingLeft: 20,
-    paddingRight: 6,
-    paddingBottom: 18,
   },
 
   // Centraliza as mensagens de carregamento e erro

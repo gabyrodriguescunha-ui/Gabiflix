@@ -22,6 +22,21 @@ export interface ItemMinhaLista {
 }
 
 // Estados que podem ser escolhidos manualmente pelo usuário
+
+// Cache curto por usuário para evitar consultar a mesma lista repetidamente
+// ao alternar entre Home, Minha lista e detalhes de uma série.
+const CACHE_LISTA_MS = 60 * 1000;
+const cacheLista = new Map<string, { dados: ItemMinhaLista[]; expiraEm: number }>();
+
+function invalidarCacheLista(userId?: string) {
+  if (userId) {
+    cacheLista.delete(userId);
+    return;
+  }
+
+  cacheLista.clear();
+}
+
 export type StatusUsuario =
   | 'quero_assistir'
   | 'assistindo'
@@ -48,6 +63,11 @@ export async function buscarSerieNaLista(
   idSerie: number
 ): Promise<ItemMinhaLista | null> {
   const usuario = await obterUsuarioConectado();
+
+  const salvo = cacheLista.get(usuario.id);
+  if (salvo && salvo.expiraEm > Date.now()) {
+    return salvo.dados.find((item) => item.serie_id === idSerie) ?? null;
+  }
 
   const { data, error } = await supabase
     .from('minha_lista')
@@ -86,8 +106,15 @@ export async function verificarSerieNaLista(
 }
 
 // Busca todas as séries salvas pelo usuário, começando pela mais recente
-export async function buscarMinhaLista(): Promise<ItemMinhaLista[]> {
+export async function buscarMinhaLista(
+  forcarAtualizacao: boolean = false
+): Promise<ItemMinhaLista[]> {
   const usuario = await obterUsuarioConectado();
+
+  const salvo = cacheLista.get(usuario.id);
+  if (!forcarAtualizacao && salvo && salvo.expiraEm > Date.now()) {
+    return salvo.dados;
+  }
 
   const { data, error } = await supabase
     .from('minha_lista')
@@ -103,7 +130,14 @@ export async function buscarMinhaLista(): Promise<ItemMinhaLista[]> {
     throw error;
   }
 
-  return (data ?? []) as ItemMinhaLista[];
+  const resultado = (data ?? []) as ItemMinhaLista[];
+
+  cacheLista.set(usuario.id, {
+    dados: resultado,
+    expiraEm: Date.now() + CACHE_LISTA_MS,
+  });
+
+  return resultado;
 }
 
 // Atualiza o estado escolhido para uma série da lista
@@ -147,6 +181,8 @@ export async function atualizarStatusSerie(
   if (error) {
     throw error;
   }
+
+  invalidarCacheLista(usuario.id);
 }
 
 // Salva as informações necessárias para reconstruir o card posteriormente
@@ -175,6 +211,8 @@ export async function adicionarSerieNaLista(
   if (error) {
     throw error;
   }
+
+  invalidarCacheLista(usuario.id);
 }
 
 // Remove a série apenas da lista pertencente ao usuário conectado
@@ -192,6 +230,8 @@ export async function removerSerieDaLista(
   if (error) {
     throw error;
   }
+
+  invalidarCacheLista(usuario.id);
 }
 
 // Apaga a série da lista e todo o progresso salvo nos episódios
@@ -221,4 +261,6 @@ export async function excluirSerieCompletamente(
   if (erroLista) {
     throw erroLista;
   }
+
+  invalidarCacheLista(usuario.id);
 }

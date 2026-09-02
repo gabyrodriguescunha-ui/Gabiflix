@@ -3,13 +3,14 @@
 // Hooks utilizados para carregar os dados quando a página recebe foco
 import {
   useCallback,
+  useMemo,
   useState,
 } from 'react';
 // Componentes visuais utilizados na página
 import {
   ActivityIndicator,
+  FlatList,
   Image,
-  ScrollView,
   Text,
   TouchableOpacity,
   View,
@@ -42,6 +43,11 @@ interface ItemCalendario {
   episodio: ProximoEpisodioSerie & {
     air_date: string;
   };
+}
+
+interface GrupoCalendario {
+  data: string;
+  episodios: ItemCalendario[];
 }
 
 // Converte YYYY-MM-DD do TMDB para data local sem deslocamento de fuso.
@@ -273,21 +279,27 @@ export default function Calendario() {
     }, [tentativaCarregamento])
   );
 
-  // Agrupa os episódios pela data de estreia
-  const grupos = itens.reduce<
-    Record<string, ItemCalendario[]>
-  >((acumulador, item) => {
-    const data =
-      item.episodio.air_date;
+  // Agrupa os episódios somente quando a lista realmente muda.
+  const grupos = useMemo<GrupoCalendario[]>(() => {
+    const mapa = itens.reduce<Record<string, ItemCalendario[]>>(
+      (acumulador, item) => {
+        const data = item.episodio.air_date;
 
-    if (!acumulador[data]) {
-      acumulador[data] = [];
-    }
+        if (!acumulador[data]) {
+          acumulador[data] = [];
+        }
 
-    acumulador[data].push(item);
+        acumulador[data].push(item);
+        return acumulador;
+      },
+      {}
+    );
 
-    return acumulador;
-  }, {});
+    return Object.entries(mapa).map(([data, episodios]) => ({
+      data,
+      episodios,
+    }));
+  }, [itens]);
 
   return (
     <SafeAreaView
@@ -426,184 +438,102 @@ export default function Calendario() {
           </Text>
         </View>
       ) : (
-        <ScrollView
-          showsVerticalScrollIndicator={
-            false
+        <FlatList
+          data={grupos}
+          keyExtractor={(grupo) => grupo.data}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={styles.conteudo}
+          initialNumToRender={4}
+          maxToRenderPerBatch={4}
+          windowSize={5}
+          removeClippedSubviews
+          ListHeaderComponent={
+            <View style={styles.resumo}>
+              <Ionicons
+                name="notifications-outline"
+                size={19}
+                color="#E91E63"
+              />
+
+              <Text style={styles.textoResumo}>
+                {itens.length}{' '}
+                {itens.length === 1
+                  ? 'série possui'
+                  : 'séries possuem'}{' '}
+                próximo episódio anunciado
+              </Text>
+            </View>
           }
-          contentContainerStyle={
-            styles.conteudo
-          }
-        >
-          {/* Resumo da quantidade de séries com episódio programado */}
-          <View style={styles.resumo}>
-            <Ionicons
-              name="notifications-outline"
-              size={19}
-              color="#E91E63"
-            />
+          renderItem={({ item: grupo }) => (
+            <View style={styles.grupoData}>
+              <View style={styles.cabecalhoData}>
+                <Text style={styles.tituloData}>
+                  {formatarTituloData(grupo.data)}
+                </Text>
 
-            <Text
-              style={styles.textoResumo}
-            >
-              {itens.length}{' '}
-              {itens.length === 1
-                ? 'série possui'
-                : 'séries possuem'}{' '}
-              próximo episódio anunciado
-            </Text>
-          </View>
-
-          {/* Cada data recebe seu próprio grupo de episódios */}
-          {(Object.entries(grupos) as [
-            string,
-            ItemCalendario[],
-          ][]).map(
-            ([data, episodios]) => (
-              <View
-                key={data}
-                style={
-                  styles.grupoData
-                }
-              >
-                <View
-                  style={
-                    styles.cabecalhoData
-                  }
-                >
-                  <Text
-                    style={
-                      styles.tituloData
-                    }
-                  >
-                    {formatarTituloData(
-                      data
-                    )}
-                  </Text>
-
-                  <Text
-                    style={
-                      styles.dataCurta
-                    }
-                  >
-                    {formatarDataCurta(
-                      data
-                    )}
-                  </Text>
-                </View>
-
-                {episodios.map(
-                  ({
-                    serie,
-                    episodio,
-                  }) => {
-                    const imagem =
-                      obterUrlEpisodio(
-                        episodio.still_path
-                      );
-
-                    return (
-                      <TouchableOpacity
-                        key={`${serie.serie_id}-${episodio.id}`}
-                        style={
-                          styles.card
-                        }
-                        activeOpacity={
-                          0.82
-                        }
-                        onPress={() =>
-                          router.push({
-                            pathname:
-                              '/serie/[id]',
-                            params: {
-                              id: String(
-                                serie.serie_id
-                              ),
-                            },
-                          })
-                        }
-                      >
-                        {/* Imagem do próximo episódio quando estiver disponível */}
-                        {imagem ? (
-                          <Image
-                            source={{
-                              uri: imagem,
-                            }}
-                            style={
-                              styles.imagem
-                            }
-                            resizeMode="cover"
-                          />
-                        ) : (
-                          <View
-                            style={
-                              styles.semImagem
-                            }
-                          >
-                            <Ionicons
-                              name="tv-outline"
-                              size={27}
-                              color="#777777"
-                            />
-                          </View>
-                        )}
-
-                        {/* Informações da série e do episódio */}
-                        <View
-                          style={
-                            styles.dadosCard
-                          }
-                        >
-                          <Text
-                            style={
-                              styles.nomeSerie
-                            }
-                            numberOfLines={
-                              1
-                            }
-                          >
-                            {serie.nome}
-                          </Text>
-
-                          <Text
-                            style={
-                              styles.numeroEpisodio
-                            }
-                          >
-                            T
-                            {
-                              episodio.season_number
-                            }{' '}
-                            • E
-                            {
-                              episodio.episode_number
-                            }
-                          </Text>
-
-                          <Text
-                            style={
-                              styles.nomeEpisodio
-                            }
-                            numberOfLines={
-                              2
-                            }
-                          >
-                            {episodio.name}
-                          </Text>
-                        </View>
-
-                        <Ionicons
-                          name="chevron-forward"
-                          size={18}
-                          color="#E91E63"
-                        />
-                      </TouchableOpacity>
-                    );
-                  }
-                )}
+                <Text style={styles.dataCurta}>
+                  {formatarDataCurta(grupo.data)}
+                </Text>
               </View>
-            )
+
+              {grupo.episodios.map(({ serie, episodio }) => {
+                const imagem = obterUrlEpisodio(episodio.still_path);
+
+                return (
+                  <TouchableOpacity
+                    key={`${serie.serie_id}-${episodio.id}`}
+                    style={styles.card}
+                    activeOpacity={0.82}
+                    onPress={() =>
+                      router.push({
+                        pathname: '/serie/[id]',
+                        params: {
+                          id: String(serie.serie_id),
+                        },
+                      })
+                    }
+                  >
+                    {imagem ? (
+                      <Image
+                        source={{ uri: imagem }}
+                        style={styles.imagem}
+                        resizeMode="cover"
+                      />
+                    ) : (
+                      <View style={styles.semImagem}>
+                        <Ionicons
+                          name="tv-outline"
+                          size={27}
+                          color="#777777"
+                        />
+                      </View>
+                    )}
+
+                    <View style={styles.dadosCard}>
+                      <Text style={styles.nomeSerie} numberOfLines={1}>
+                        {serie.nome}
+                      </Text>
+
+                      <Text style={styles.numeroEpisodio}>
+                        T{episodio.season_number} • E{episodio.episode_number}
+                      </Text>
+
+                      <Text style={styles.nomeEpisodio} numberOfLines={2}>
+                        {episodio.name}
+                      </Text>
+                    </View>
+
+                    <Ionicons
+                      name="chevron-forward"
+                      size={18}
+                      color="#E91E63"
+                    />
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
           )}
-        </ScrollView>
+        />
       )}
     </SafeAreaView>
   );

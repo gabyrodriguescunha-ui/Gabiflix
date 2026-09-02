@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 // Componentes visuais utilizados na página
 import {
   ActivityIndicator,
+  FlatList,
   Image,
   ScrollView,
   Text,
@@ -23,7 +24,7 @@ import {
   buscarProvedoresStreamingBrasil,
   buscarSeries,
   buscarSeriesPorGeneroPeriodo,
-  obterUrlCapa,
+  obterUrlCapaPequena,
   obterUrlLogoProvedor,
   type ProvedorStreaming,
 } from '../services/tmdb.service';
@@ -295,7 +296,7 @@ export default function Busca() {
 
   function renderizarCardSerie(serie: Serie) {
     const urlCapa =
-      obterUrlCapa(serie.poster_path);
+      obterUrlCapaPequena(serie.poster_path);
 
     const ano =
       serie.first_air_date
@@ -733,15 +734,20 @@ export default function Busca() {
             </Text>
           </View>
         ) : (
-          <ScrollView
+          <FlatList
+            data={resultadosDescoberta}
+            keyExtractor={(item) => String(item.id)}
+            renderItem={({ item }) => renderizarCardSerie(item)}
             showsVerticalScrollIndicator={false}
             contentContainerStyle={styles.lista}
-          >
-            <Text style={styles.tituloResultados}>
-              Descobrir
-            </Text>
-            {resultadosDescoberta.map(renderizarCardSerie)}
-          </ScrollView>
+            initialNumToRender={6}
+            maxToRenderPerBatch={6}
+            windowSize={7}
+            removeClippedSubviews
+            ListHeaderComponent={
+              <Text style={styles.tituloResultados}>Descobrir</Text>
+            }
+          />
         )
       ) : resultados.length === 0 ? (
         <View style={styles.estadoCentralizado}>
@@ -760,16 +766,20 @@ export default function Busca() {
           </Text>
         </View>
       ) : (
-        <ScrollView
+        <FlatList
+          data={resultados}
+          keyExtractor={(item) => String(item.id)}
+          renderItem={({ item }) => renderizarCardSerie(item)}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.lista}
-        >
-          {/* Informa que os dados abaixo são os resultados da pesquisa */}
-          <Text style={styles.tituloResultados}>
-            Resultados
-          </Text>
-          {resultados.map(renderizarCardSerie)}
-        </ScrollView>
+          initialNumToRender={6}
+          maxToRenderPerBatch={6}
+          windowSize={7}
+          removeClippedSubviews
+          ListHeaderComponent={
+            <Text style={styles.tituloResultados}>Resultados</Text>
+          }
+        />
       )}
     </SafeAreaView>
   );

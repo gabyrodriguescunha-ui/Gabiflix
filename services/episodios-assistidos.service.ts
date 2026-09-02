@@ -17,6 +17,24 @@ export interface RegistroEpisodioAssistido {
   assistido_em: string;
 }
 
+
+// Cache curto do histórico por usuário. É invalidado imediatamente sempre
+// que um episódio é marcado ou desmarcado.
+const CACHE_HISTORICO_MS = 60 * 1000;
+const cacheHistorico = new Map<
+  string,
+  { dados: RegistroEpisodioAssistido[]; expiraEm: number }
+>();
+
+function invalidarCacheHistorico(userId?: string) {
+  if (userId) {
+    cacheHistorico.delete(userId);
+    return;
+  }
+
+  cacheHistorico.clear();
+}
+
 // Recupera o usuário autenticado antes de acessar seu progresso
 async function obterUsuarioConectado() {
   const { data, error } = await supabase.auth.getUser();
@@ -78,6 +96,11 @@ export async function buscarHistoricoAssistido(): Promise<
 > {
   const usuario = await obterUsuarioConectado();
 
+  const salvo = cacheHistorico.get(usuario.id);
+  if (salvo && salvo.expiraEm > Date.now()) {
+    return salvo.dados;
+  }
+
   const { data, error } = await supabase
     .from('episodios_assistidos')
     .select(
@@ -90,7 +113,14 @@ export async function buscarHistoricoAssistido(): Promise<
     throw error;
   }
 
-  return (data ?? []) as RegistroEpisodioAssistido[];
+  const resultado = (data ?? []) as RegistroEpisodioAssistido[];
+
+  cacheHistorico.set(usuario.id, {
+    dados: resultado,
+    expiraEm: Date.now() + CACHE_HISTORICO_MS,
+  });
+
+  return resultado;
 }
 
 // Registra que um episódio foi assistido pelo usuário
@@ -129,6 +159,8 @@ export async function marcarEpisodiosAssistidos(
   if (error) {
     throw error;
   }
+
+  invalidarCacheHistorico(usuario.id);
 }
 
 // Remove a marcação de assistido de um episódio
@@ -146,6 +178,8 @@ export async function desmarcarEpisodioAssistido(
   if (error) {
     throw error;
   }
+
+  invalidarCacheHistorico(usuario.id);
 }
 
 // Desmarca o episódio selecionado e todos os episódios seguintes da temporada
@@ -167,6 +201,8 @@ export async function desmarcarEpisodiosSeguintes(
   if (error) {
     throw error;
   }
+
+  invalidarCacheHistorico(usuario.id);
 }
 
 

@@ -85,24 +85,87 @@ const opcoesRequisicao = {
 };
 
 
-// Busca as séries que estão em tendência durante a semana
-export async function buscarSeriesEmAlta(): Promise<RespostaSeries> {
-  // Impede uma requisição sem o token configurado
+// -----------------------------------------------------------------------------
+// CACHE EM MEMÓRIA
+// Evita repetir a mesma chamada ao TMDB enquanto o aplicativo permanece aberto.
+// Também reaproveita uma requisição que já esteja em andamento para a mesma URL.
+// -----------------------------------------------------------------------------
+
+interface EntradaCache<T> {
+  dados: T;
+  expiraEm: number;
+}
+
+const cacheTmdb = new Map<string, EntradaCache<unknown>>();
+const requisicoesEmAndamento = new Map<string, Promise<unknown>>();
+
+const TEMPO_CACHE = {
+  curto: 5 * 60 * 1000,        // 5 minutos
+  catalogo: 10 * 60 * 1000,    // 10 minutos
+  detalhes: 60 * 60 * 1000,    // 1 hora
+  provedores: 24 * 60 * 60 * 1000, // 24 horas
+};
+
+async function buscarJsonComCache<T>(
+  url: string,
+  duracaoMs: number
+): Promise<T> {
   if (!TOKEN_TMDB) {
     throw new Error('O Token de Leitura do TMDB não foi configurado.');
   }
 
-  const resposta = await fetch(
-    `${URL_BASE}/trending/tv/week?language=pt-BR`,
-    opcoesRequisicao
-  );
+  const agora = Date.now();
+  const salvo = cacheTmdb.get(url) as EntradaCache<T> | undefined;
 
-  // Transforma respostas de erro da API em erros do aplicativo
-  if (!resposta.ok) {
-    throw new Error(`Erro do TMDB: ${resposta.status}`);
+  if (salvo && salvo.expiraEm > agora) {
+    return salvo.dados;
   }
 
-  return resposta.json() as Promise<RespostaSeries>;
+  const emAndamento = requisicoesEmAndamento.get(url) as Promise<T> | undefined;
+
+  if (emAndamento) {
+    return emAndamento;
+  }
+
+  const promessa = (async () => {
+    const resposta = await fetch(url, opcoesRequisicao);
+
+    if (!resposta.ok) {
+      throw new Error(`Erro do TMDB: ${resposta.status}`);
+    }
+
+    const dados = (await resposta.json()) as T;
+
+    cacheTmdb.set(url, {
+      dados,
+      expiraEm: Date.now() + duracaoMs,
+    });
+
+    return dados;
+  })();
+
+  requisicoesEmAndamento.set(url, promessa);
+
+  try {
+    return await promessa;
+  } finally {
+    requisicoesEmAndamento.delete(url);
+  }
+}
+
+// Útil para forçar uma atualização manual no futuro, sem reiniciar o app.
+export function limparCacheTmdb(): void {
+  cacheTmdb.clear();
+  requisicoesEmAndamento.clear();
+}
+
+
+// Busca as séries que estão em tendência durante a semana
+export async function buscarSeriesEmAlta(): Promise<RespostaSeries> {
+  return buscarJsonComCache<RespostaSeries>(
+    `${URL_BASE}/trending/tv/week?language=pt-BR`,
+    TEMPO_CACHE.catalogo
+  );
 }
 
 
@@ -110,61 +173,38 @@ export async function buscarSeriesEmAlta(): Promise<RespostaSeries> {
 export async function buscarLancamentosRecentes(
   pagina: number = 1
 ): Promise<RespostaSeries> {
-  // Impede uma requisição sem o token configurado
-  if (!TOKEN_TMDB) {
-    throw new Error('O Token de Leitura do TMDB não foi configurado.');
-  }
-
-  // Utiliza os últimos 30 dias como período de lançamentos recentes
   const hoje = new Date();
   const trintaDiasAtras = new Date();
   trintaDiasAtras.setDate(hoje.getDate() - 30);
 
-  // Converte as datas para o formato YYYY-MM-DD esperado pelo TMDB
   const formatarData = (data: Date) =>
     data.toISOString().split('T')[0];
 
   const dataInicial = formatarData(trintaDiasAtras);
   const dataFinal = formatarData(hoje);
 
-  const resposta = await fetch(
+  const url =
     `${URL_BASE}/discover/tv?language=pt-BR&page=${pagina}` +
-      `&sort_by=first_air_date.desc` +
-      `&first_air_date.gte=${dataInicial}` +
-      `&first_air_date.lte=${dataFinal}` +
-      `&watch_region=BR` +
-      `&with_watch_monetization_types=flatrate|free|ads` +
-      `&include_null_first_air_dates=false`,
-    opcoesRequisicao
+    `&sort_by=first_air_date.desc` +
+    `&first_air_date.gte=${dataInicial}` +
+    `&first_air_date.lte=${dataFinal}` +
+    `&watch_region=BR` +
+    `&with_watch_monetization_types=flatrate|free|ads` +
+    `&include_null_first_air_dates=false`;
+
+  return buscarJsonComCache<RespostaSeries>(
+    url,
+    TEMPO_CACHE.catalogo
   );
-
-  // Transforma respostas de erro da API em erros do aplicativo
-  if (!resposta.ok) {
-    throw new Error(`Erro do TMDB: ${resposta.status}`);
-  }
-
-  return resposta.json() as Promise<RespostaSeries>;
 }
 
 
 // Busca as séries populares e solicita os textos em português do Brasil
 export async function buscarSeriesPopulares(): Promise<RespostaSeries> {
-  // Impede uma requisição sem o token configurado
-  if (!TOKEN_TMDB) {
-    throw new Error('O Token de Leitura do TMDB não foi configurado.');
-  }
-
-  const resposta = await fetch(
+  return buscarJsonComCache<RespostaSeries>(
     `${URL_BASE}/tv/popular?language=pt-BR&page=1`,
-    opcoesRequisicao
+    TEMPO_CACHE.catalogo
   );
-
-  // Transforma respostas de erro da API em erros do aplicativo
-  if (!resposta.ok) {
-    throw new Error(`Erro do TMDB: ${resposta.status}`);
-  }
-
-  return resposta.json() as Promise<RespostaSeries>;
 }
 
 
@@ -172,25 +212,13 @@ export async function buscarSeriesPopulares(): Promise<RespostaSeries> {
 export async function buscarProvedoresStreamingBrasil(): Promise<
   ProvedorStreaming[]
 > {
-  if (!TOKEN_TMDB) {
-    throw new Error('O Token de Leitura do TMDB não foi configurado.');
-  }
-
-  const resposta = await fetch(
+  const dados = await buscarJsonComCache<RespostaProvedoresStreaming>(
     `${URL_BASE}/watch/providers/tv?language=pt-BR&watch_region=BR`,
-    opcoesRequisicao
+    TEMPO_CACHE.provedores
   );
 
-  if (!resposta.ok) {
-    throw new Error(`Erro do TMDB: ${resposta.status}`);
-  }
-
-  const dados =
-    (await resposta.json()) as RespostaProvedoresStreaming;
-
   return (dados.results ?? []).sort(
-    (a, b) =>
-      a.display_priority - b.display_priority
+    (a, b) => a.display_priority - b.display_priority
   );
 }
 
@@ -321,18 +349,10 @@ export async function buscarSeriesPorGeneroPeriodo(
       `&first_air_date.lte=${dataFinal}`;
   }
 
-  const resposta = await fetch(
+  return buscarJsonComCache<RespostaSeries>(
     url,
-    opcoesRequisicao
+    TEMPO_CACHE.catalogo
   );
-
-  if (!resposta.ok) {
-    throw new Error(
-      `Erro do TMDB: ${resposta.status}`
-    );
-  }
-
-  return resposta.json() as Promise<RespostaSeries>;
 }
 
 
@@ -340,15 +360,8 @@ export async function buscarSeriesPorGeneroPeriodo(
 export async function buscarSeries(
   termo: string
 ): Promise<RespostaSeries> {
-  // Impede uma requisição sem o token configurado
-  if (!TOKEN_TMDB) {
-    throw new Error('O Token de Leitura do TMDB não foi configurado.');
-  }
-
-  // Remove espaços desnecessários antes de realizar a pesquisa
   const termoPesquisa = termo.trim();
 
-  // Evita enviar uma pesquisa vazia para o TMDB
   if (!termoPesquisa) {
     return {
       page: 1,
@@ -358,19 +371,14 @@ export async function buscarSeries(
     };
   }
 
-  const resposta = await fetch(
-    `${URL_BASE}/search/tv?query=${encodeURIComponent(
-      termoPesquisa
-    )}&language=pt-BR&page=1`,
-    opcoesRequisicao
+  const url =
+    `${URL_BASE}/search/tv?query=${encodeURIComponent(termoPesquisa)}` +
+    `&language=pt-BR&page=1`;
+
+  return buscarJsonComCache<RespostaSeries>(
+    url,
+    TEMPO_CACHE.curto
   );
-
-  // Transforma respostas de erro da API em erros do aplicativo
-  if (!resposta.ok) {
-    throw new Error(`Erro do TMDB: ${resposta.status}`);
-  }
-
-  return resposta.json() as Promise<RespostaSeries>;
 }
 
 
@@ -380,21 +388,10 @@ export async function buscarSeries(
 export async function buscarSeriePorTvdbId(
   tvdbId: number
 ): Promise<SerieEncontradaPorIdExterno | null> {
-  if (!TOKEN_TMDB) {
-    throw new Error('O Token de Leitura do TMDB não foi configurado.');
-  }
-
-  const resposta = await fetch(
+  const dados = await buscarJsonComCache<RespostaBuscaIdExterno>(
     `${URL_BASE}/find/${tvdbId}?external_source=tvdb_id&language=pt-BR`,
-    opcoesRequisicao
+    TEMPO_CACHE.detalhes
   );
-
-  if (!resposta.ok) {
-    throw new Error(`Erro do TMDB: ${resposta.status}`);
-  }
-
-  const dados =
-    (await resposta.json()) as RespostaBuscaIdExterno;
 
   return dados.tv_results?.[0] ?? null;
 }
@@ -404,69 +401,35 @@ export async function buscarSeriePorTvdbId(
 export async function buscarProximoEpisodioSerie(
   idSerie: number
 ): Promise<ProximoEpisodioSerie | null> {
-  // Impede uma requisição sem o token configurado
-  if (!TOKEN_TMDB) {
-    throw new Error('O Token de Leitura do TMDB não foi configurado.');
-  }
-
-  const resposta = await fetch(
+  const dados = await buscarJsonComCache<RespostaProximoEpisodio>(
     `${URL_BASE}/tv/${idSerie}?language=pt-BR`,
-    opcoesRequisicao
+    TEMPO_CACHE.curto
   );
-
-  // Transforma respostas de erro da API em erros do aplicativo
-  if (!resposta.ok) {
-    throw new Error(`Erro do TMDB: ${resposta.status}`);
-  }
-
-  const dados =
-    (await resposta.json()) as RespostaProximoEpisodio;
 
   return dados.next_episode_to_air ?? null;
 }
+
 
 // Busca todas as informações da série selecionada pelo usuário
 export async function buscarDetalhesSerie(
   idSerie: number
 ): Promise<DetalhesSerie> {
-  // Impede uma requisição sem o token configurado
-  if (!TOKEN_TMDB) {
-    throw new Error('O Token de Leitura do TMDB não foi configurado.');
-  }
-
-  const resposta = await fetch(
+  return buscarJsonComCache<DetalhesSerie>(
     `${URL_BASE}/tv/${idSerie}?language=pt-BR`,
-    opcoesRequisicao
+    TEMPO_CACHE.detalhes
   );
-
-  // Informa quando a série não pôde ser carregada
-  if (!resposta.ok) {
-    throw new Error(`Erro do TMDB: ${resposta.status}`);
-  }
-
-  return resposta.json() as Promise<DetalhesSerie>;
 }
+
 
 // Busca os primeiros nomes do elenco principal de uma série.
 export async function buscarElencoPrincipal(
   idSerie: number,
   limite: number = 8
 ): Promise<PessoaElenco[]> {
-  if (!TOKEN_TMDB) {
-    throw new Error('O Token de Leitura do TMDB não foi configurado.');
-  }
-
-  const resposta = await fetch(
+  const dados = await buscarJsonComCache<RespostaCreditosSerie>(
     `${URL_BASE}/tv/${idSerie}/credits?language=pt-BR`,
-    opcoesRequisicao
+    TEMPO_CACHE.detalhes
   );
-
-  if (!resposta.ok) {
-    throw new Error(`Erro do TMDB: ${resposta.status}`);
-  }
-
-  const dados =
-    (await resposta.json()) as RespostaCreditosSerie;
 
   return (dados.cast ?? [])
     .filter((pessoa) => pessoa.name)
@@ -474,26 +437,18 @@ export async function buscarElencoPrincipal(
     .slice(0, limite);
 }
 
+
 // Busca os episódios de uma temporada específica
 export async function buscarDetalhesTemporada(
   idSerie: number,
   numeroTemporada: number
 ): Promise<DetalhesTemporada> {
-  if (!TOKEN_TMDB) {
-    throw new Error('O Token de Leitura do TMDB não foi configurado.');
-  }
-
-  const resposta = await fetch(
+  return buscarJsonComCache<DetalhesTemporada>(
     `${URL_BASE}/tv/${idSerie}/season/${numeroTemporada}?language=pt-BR`,
-    opcoesRequisicao
+    TEMPO_CACHE.detalhes
   );
-
-  if (!resposta.ok) {
-    throw new Error(`Erro do TMDB: ${resposta.status}`);
-  }
-
-  return resposta.json() as Promise<DetalhesTemporada>;
 }
+
 
 // Monta a URL do logo de um provedor de streaming
 export function obterUrlLogoProvedor(
@@ -534,6 +489,18 @@ export function obterUrlCapa(caminho: string | null): string | null {
   }
 
   return `${URL_IMAGEM}/w500${caminho}`;
+}
+
+
+// Versão menor para cards compactos da Home/Busca, reduzindo o download da imagem.
+export function obterUrlCapaPequena(
+  caminho: string | null
+): string | null {
+  if (!caminho) {
+    return null;
+  }
+
+  return `${URL_IMAGEM}/w342${caminho}`;
 }
 
 // Monta a URL completa de uma imagem de fundo recebida da API
