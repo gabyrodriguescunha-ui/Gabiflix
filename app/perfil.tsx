@@ -5,7 +5,6 @@ import { useCallback, useState } from 'react';
 // Componentes visuais utilizados na página
 import {
   ActivityIndicator,
-  Alert,
   Image,
   ScrollView,
   Text,
@@ -31,6 +30,7 @@ import {
   type RegistroEpisodioAssistido,
 } from '../services/episodios-assistidos.service';
 // Estilos exclusivos da página
+import { ModalConfirmacao } from '../components/modal-confirmacao/ModalConfirmacao';
 import { styles } from '../styles/perfil.styles';
 
 
@@ -75,6 +75,8 @@ export default function Perfil() {
   // Controla os estados da consulta
   const [carregando, setCarregando] = useState(true);
   const [mensagemErro, setMensagemErro] = useState('');
+  const [modalSaidaVisivel, setModalSaidaVisivel] = useState(false);
+  const [erroSaida, setErroSaida] = useState<string | null>(null);
 
   // Calcula os números apresentados na página utilizando apenas dados reais
   function calcularEstatisticas(
@@ -193,29 +195,28 @@ export default function Perfil() {
     }, [])
   );
 
-  // Encerra a sessão do usuário após confirmação
+  // Abre o modal personalizado do Gabiflix.
   function confirmarSaida() {
-    Alert.alert(
-      'Sair do Gabiflix?',
-      'Você precisará entrar novamente para acessar sua conta.',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Sair',
-          style: 'destructive',
-          onPress: async () => {
-            const { error } = await supabase.auth.signOut();
+    setModalSaidaVisivel(true);
+  }
 
-            if (error) {
-              Alert.alert('Não foi possível sair', 'Tente novamente.');
-              return;
-            }
+  // Encerra a sessão somente depois que a pessoa toca em "Sair".
+  async function sairDaConta() {
+    try {
+      const { error } = await supabase.auth.signOut();
 
-            router.replace('/');
-          },
-        },
-      ]
-    );
+      if (error) {
+        setModalSaidaVisivel(false);
+        setErroSaida('Tente novamente.');
+        return;
+      }
+
+      setModalSaidaVisivel(false);
+      router.replace('/');
+    } catch {
+      setModalSaidaVisivel(false);
+      setErroSaida('Tente novamente.');
+    }
   }
 
   // Exibe um estado centralizado enquanto os dados são preparados
@@ -246,7 +247,7 @@ export default function Perfil() {
         <TouchableOpacity
           style={styles.botaoVoltarErro}
           activeOpacity={0.8}
-          onPress={router.back}
+          onPress={() => router.replace('/inicio')}
         >
           <Text style={styles.textoBotaoVoltarErro}>Voltar</Text>
         </TouchableOpacity>
@@ -261,7 +262,7 @@ export default function Perfil() {
         <TouchableOpacity
           style={styles.botaoCabecalho}
           activeOpacity={0.7}
-          onPress={router.back}
+          onPress={() => router.replace('/inicio')}
           accessibilityLabel="Voltar"
         >
           <Ionicons name="chevron-back" size={26} color="#E91E63" />
@@ -447,6 +448,39 @@ export default function Perfil() {
           </TouchableOpacity>
         </View>
       </ScrollView>
+
+      <ModalConfirmacao
+        visivel={modalSaidaVisivel}
+        titulo="Sair do Gabiflix?"
+        descricao="Você precisará entrar novamente para acessar sua conta."
+        onFechar={() => setModalSaidaVisivel(false)}
+        acoes={[
+          {
+            texto: 'Cancelar',
+            tipo: 'cancelar',
+            onPress: () => setModalSaidaVisivel(false),
+          },
+          {
+            texto: 'Sair',
+            tipo: 'principal',
+            onPress: sairDaConta,
+          },
+        ]}
+      />
+
+      <ModalConfirmacao
+        visivel={Boolean(erroSaida)}
+        titulo="Não foi possível sair"
+        descricao={erroSaida ?? ''}
+        onFechar={() => setErroSaida(null)}
+        acoes={[
+          {
+            texto: 'Entendi',
+            tipo: 'principal',
+            onPress: () => setErroSaida(null),
+          },
+        ]}
+      />
     </SafeAreaView>
   );
 }

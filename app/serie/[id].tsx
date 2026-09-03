@@ -144,6 +144,50 @@ function episodioFoiLancado(data: string | null): boolean {
   return dataEpisodio <= hoje;
 }
 
+
+// Evita mostrar temporadas futuras antes da data de estreia.
+// Se o TMDB ainda não informou a data, a temporada também fica oculta.
+function temporadaJaEstreou(data: string | null | undefined): boolean {
+  if (!data) {
+    return false;
+  }
+
+  const [ano, mes, dia] = data.split('-').map(Number);
+  const dataTemporada = new Date(ano, mes - 1, dia);
+
+  if (
+    !Number.isFinite(ano) ||
+    !Number.isFinite(mes) ||
+    !Number.isFinite(dia) ||
+    dataTemporada.getFullYear() !== ano ||
+    dataTemporada.getMonth() !== mes - 1 ||
+    dataTemporada.getDate() !== dia
+  ) {
+    return false;
+  }
+
+  const hoje = new Date();
+  hoje.setHours(0, 0, 0, 0);
+
+  return dataTemporada <= hoje;
+}
+
+
+// Exibe a temporada quando ela já existe de verdade no TMDB
+function temporadaPodeAparecer(
+  temporada: {
+    season_number: number;
+    episode_count: number;
+    air_date?: string | null;
+  }
+): boolean {
+  return (
+    temporada.season_number > 0 &&
+    temporada.episode_count > 0 &&
+    Boolean(temporada.air_date)
+  );
+}
+
 // Converte a data futura do episódio para o formato utilizado no Brasil
 function formatarDataEpisodio(data: string | null): string {
   if (!data) {
@@ -178,8 +222,11 @@ function formatarDuracao(minutos: number | null): string | null {
 
 // Página aberta quando o usuário toca em um card
 export default function DetalhesDaSerie() {
-  // Recupera o ID presente no endereço /serie/[id]
-  const { id } = useLocalSearchParams<{ id: string }>();
+  // Recupera o ID e, opcionalmente, a temporada enviada pela Home.
+  const { id, temporada: temporadaParametro } = useLocalSearchParams<{
+    id: string;
+    temporada?: string;
+  }>();
   const router = useRouter();
   // Controla os avisos e erros com o mesmo design visual do Gabiflix
   const [aviso, setAviso] = useState<{
@@ -242,7 +289,7 @@ export default function DetalhesDaSerie() {
     useState<number | null>(null);
 
   // Controla qual temporada está expandida e ações de temporada inteira
-  const [temporadaExpandida, setTemporadaExpandida] = useState<number | null>(1);
+  const [temporadaExpandida, setTemporadaExpandida] = useState<number | null>(null);
   const [alterandoTemporadaInteira, setAlterandoTemporadaInteira] =
     useState(false);
 
@@ -321,13 +368,12 @@ export default function DetalhesDaSerie() {
           }
         }
 
-        // Carrega a quantidade assistida de todas as temporadas para que
-        // cada cabeçalho mostre seu progresso mesmo quando estiver recolhido.
         const temporadasRegulares =
           resultado.seasons.filter(
             (item) =>
               item.season_number > 0 &&
-              item.episode_count > 0
+              item.episode_count > 0 &&
+              temporadaJaEstreou(item.air_date)
           );
 
         const progressoCarregado =
@@ -366,26 +412,31 @@ export default function DetalhesDaSerie() {
           Object.fromEntries(progressoCarregado)
         );
 
-        // Ignora especiais e evita selecionar uma temporada futura vazia
-        // quando já existe uma temporada comum com episódios.
         const primeiraTemporada =
           resultado.seasons.find(
             (item) =>
               item.season_number > 0 &&
-              item.episode_count > 0
-          ) ??
-          resultado.seasons.find(
-            (item) => item.season_number > 0
+              item.episode_count > 0 &&
+              temporadaJaEstreou(item.air_date)
           );
 
-        if (primeiraTemporada) {
-          setNumeroTemporada(
-            primeiraTemporada.season_number
+        const numeroRecebido = Number(temporadaParametro);
+        
+        const temporadaRecebida =
+          resultado.seasons.find(
+            (item) =>
+              item.season_number === numeroRecebido &&
+              temporadaPodeAparecer(item)
           );
-          setTemporadaExpandida(
-            primeiraTemporada.season_number
-          );
-        }
+
+     if (temporadaRecebida) {
+  setNumeroTemporada(
+    temporadaRecebida.season_number
+  );
+
+  // Temporadas iniciam recolhidas
+  setTemporadaExpandida(null);
+}
       } catch (erro) {
         console.log('Erro ao buscar detalhes:', erro);
 
@@ -406,7 +457,7 @@ export default function DetalhesDaSerie() {
     return () => {
       telaAtiva = false;
     };
-  }, [idSerie, tentativaCarregamento]);
+  }, [idSerie, tentativaCarregamento, temporadaParametro]);
 
   // Confere no Supabase se a série carregada já pertence à lista do usuário
   useEffect(() => {
@@ -516,9 +567,6 @@ export default function DetalhesDaSerie() {
     }
   }
 
-  // Mantém o status da Minha lista sincronizado após remover progresso.
-  // Se uma série finalizada perder um episódio assistido, ela volta para
-  // Assistindo. Se não restar nenhum progresso, volta para Quero assistir.
   async function sincronizarStatusAposDesmarcar() {
     if (!serieSalva) {
       return;
@@ -556,7 +604,6 @@ export default function DetalhesDaSerie() {
   }
 
   // Ajusta o status quando o usuário volta a assistir uma série.
-  // Reassistindo é preservado, pois representa um fluxo diferente.
   async function sincronizarStatusAposMarcar() {
     if (!serie) {
       return;
@@ -588,10 +635,6 @@ export default function DetalhesDaSerie() {
     }
   }
 
-  // Verifica se todos os episódios JÁ LANÇADOS das temporadas comuns
-  // de uma série encerrada/cancelada foram assistidos.
-  // Temporadas especiais (0), temporadas vazias e episódios futuros
-  // não impedem a conclusão automática.
   async function verificarFinalizacaoAutomatica() {
     if (
       !serie ||
@@ -605,7 +648,8 @@ export default function DetalhesDaSerie() {
       serie.seasons.filter(
         (item) =>
           item.season_number > 0 &&
-          item.episode_count > 0
+          item.episode_count > 0 &&
+          temporadaJaEstreou(item.air_date)
       );
 
     if (temporadasComEpisodios.length === 0) {
@@ -686,8 +730,6 @@ export default function DetalhesDaSerie() {
 
       await sincronizarStatusAposMarcar();
 
-      // A checagem de conclusão é complementar ao salvamento do episódio.
-      // Se o TMDB falhar aqui, o progresso já salvo continua válido.
       try {
         await verificarFinalizacaoAutomatica();
       } catch (erro) {
@@ -846,7 +888,6 @@ export default function DetalhesDaSerie() {
       );
 
       // Remove o episódio selecionado e todos os seguintes
-      // com uma única operação no Supabase.
       await desmarcarEpisodiosSeguintes(
         idSerie,
         numeroTemporada,
@@ -888,7 +929,6 @@ export default function DetalhesDaSerie() {
   }
 
   // Marca ou desmarca todos os episódios JÁ LANÇADOS de qualquer temporada.
-  // Funciona mesmo quando a temporada está recolhida.
   async function alternarTemporadaInteira(
     temporadaNumero: number
   ) {
@@ -1196,9 +1236,10 @@ export default function DetalhesDaSerie() {
 
   const statusSerie = obterStatusSerie(serie.status);
 
-  // Remove a temporada zero porque ela normalmente representa especiais
+  // Mostra temporadas já lançadas e também temporadas futuras realmente
+  // anunciadas pelo TMDB (com data + episódios cadastrados).
   const temporadasComuns = serie.seasons.filter(
-    (item) => item.season_number > 0
+    temporadaPodeAparecer
   );
 
   return (
@@ -1496,6 +1537,9 @@ export default function DetalhesDaSerie() {
               quantidadeAssistidos >=
                 item.episode_count;
 
+            const temporadaFutura =
+              !temporadaJaEstreou(item.air_date);
+
             return (
               <View
                 key={item.id}
@@ -1522,13 +1566,19 @@ export default function DetalhesDaSerie() {
                         Temporada {item.season_number}
                       </Text>
                       <Text style={styles.resumoTemporada}>
-                        {item.episode_count}{' '}
-                        {item.episode_count === 1
-                          ? 'episódio'
-                          : 'episódios'}
-                        {' · '}
-                        {quantidadeAssistidos}/
-                        {item.episode_count} assistidos
+                        {temporadaFutura
+                          ? `${item.episode_count} ${
+                              item.episode_count === 1
+                                ? 'episódio'
+                                : 'episódios'
+                            } · estreia em ${formatarDataEpisodio(
+                              item.air_date ?? null
+                            )}`
+                          : `${item.episode_count} ${
+                              item.episode_count === 1
+                                ? 'episódio'
+                                : 'episódios'
+                            } · ${quantidadeAssistidos}/${item.episode_count} assistidos`}
                       </Text>
                     </View>
                     <Ionicons
@@ -1538,35 +1588,37 @@ export default function DetalhesDaSerie() {
                     />
                   </TouchableOpacity>
 
-                  <TouchableOpacity
-                    style={[
-                      styles.botaoMarcarTemporada,
-                      temporadaCompleta && styles.botaoMarcarTemporadaAtivo,
-                    ]}
-                    activeOpacity={0.75}
-                    disabled={
-                      alterandoTemporadaInteira
-                    }
-                    onPress={() =>
-                      alternarTemporadaInteira(
-                        item.season_number
-                      )
-                    }
-                  >
-                    {alterandoTemporadaInteira ? (
-                      <ActivityIndicator size="small" color="#FFFFFF" />
-                    ) : (
-                      <Ionicons
-                        name={temporadaCompleta ? 'checkmark' : 'ellipse-outline'}
-                        size={25}
-                        color={
-                          temporadaCompleta
-                            ? '#FFFFFF'
-                            : '#E91E63'
-                        }
-                      />
-                    )}
-                  </TouchableOpacity>
+                  {!temporadaFutura && (
+                    <TouchableOpacity
+                      style={[
+                        styles.botaoMarcarTemporada,
+                        temporadaCompleta && styles.botaoMarcarTemporadaAtivo,
+                      ]}
+                      activeOpacity={0.75}
+                      disabled={
+                        alterandoTemporadaInteira
+                      }
+                      onPress={() =>
+                        alternarTemporadaInteira(
+                          item.season_number
+                        )
+                      }
+                    >
+                      {alterandoTemporadaInteira ? (
+                        <ActivityIndicator size="small" color="#FFFFFF" />
+                      ) : (
+                        <Ionicons
+                          name="checkmark"
+                          size={15}
+                          color={
+                            temporadaCompleta
+                              ? '#FFFFFF'
+                              : '#E91E63'
+                          }
+                        />
+                      )}
+                    </TouchableOpacity>
+                  )}
                 </View>
 
                 {expandida && temporadaAtual && (
@@ -1792,19 +1844,23 @@ export default function DetalhesDaSerie() {
                           color="#E91E63"
                         />
                       ) : (
-                        <Ionicons
-                          name={
-                            assistido
-                              ? 'checkmark-circle'
-                              : 'ellipse-outline'
-                          }
-                          size={23}
-                          color={
-                            assistido
-                              ? '#E91E63'
-                              : '#777777'
-                          }
-                        />
+                        <View
+                          style={[
+                            styles.botaoAssistidoDetalhes,
+                            assistido &&
+                              styles.botaoAssistidoDetalhesAtivo,
+                          ]}
+                        >
+                          <Ionicons
+                            name="checkmark"
+                            size={15}
+                            color={
+                              assistido
+                                ? '#FFFFFF'
+                                : '#E91E63'
+                            }
+                          />
+                        </View>
                       )}
                     </View>
                   )}

@@ -73,8 +73,13 @@ export const styles = StyleSheet.create({
     color: '#FFFFFF',
   },
 
+  areaConteudoTemporada: {
+    flex: 1,
+  },
+
   listaEpisodios: {
     paddingHorizontal: 20,
+    paddingTop: 6,
     paddingBottom: 30,
   },
 
@@ -85,16 +90,29 @@ export const styles = StyleSheet.create({
   },
 
   cabecalhoTemporada: {
+    minHeight: 60,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    backgroundColor: '#1A1A1A',
+    borderColor: '#303030',
+    borderRadius: 12,
+    borderWidth: 1,
     marginBottom: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+
+  infoTemporada: {
+    flex: 1,
+    paddingRight: 12,
   },
 
   progressoTemporada: {
     color: '#F48FB1',
     fontFamily: 'Poppins_500Medium',
     fontSize: 11,
+    marginTop: 3,
   },
 
   cardEpisodio: {
@@ -119,6 +137,13 @@ export const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#242424',
+  },
+
+
+  logoImagemAusente: {
+    width: 58,
+    height: 58,
+    opacity: 0.92,
   },
 
   dadosEpisodio: {

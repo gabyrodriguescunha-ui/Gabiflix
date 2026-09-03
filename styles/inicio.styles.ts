@@ -3,6 +3,7 @@
 // Importa a ferramenta de criação de estilos do React Native
 import { StyleSheet } from 'react-native';
 
+
 // Estilos utilizados pela página principal
 export const styles = StyleSheet.create({
   // Ocupa toda a tela e aplica o tema escuro
@@ -105,6 +106,30 @@ export const styles = StyleSheet.create({
     marginTop: 2,
   },
 
+
+  linhaEpisodioContinuar: {
+    minHeight: 29,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 2,
+  },
+
+ botaoAssistidoHome: {
+  width: 25,
+  height: 25,
+  alignItems: 'center',
+  justifyContent: 'center',
+  backgroundColor: 'transparent',
+  borderWidth: 1.5,
+  borderColor: '#E91E63',
+  borderRadius: 14,
+  marginLeft: 7,
+},
+
+botaoAssistidoHomeAtivo: {
+  backgroundColor: '#E91E63',
+},
   trilhoContinuar: {
     height: 4,
     backgroundColor: '#303030',
@@ -302,6 +327,45 @@ export const styles = StyleSheet.create({
     fontFamily: 'Poppins_600SemiBold',
     fontSize: 10.5,
     marginLeft: 5,
+  },
+
+  toastAssistido: {
+    position: 'absolute',
+    left: 18,
+    right: 18,
+    bottom: 84,
+    minHeight: 62,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#202025',
+    borderWidth: 1,
+    borderColor: '#34343A',
+    borderRadius: 14,
+    paddingHorizontal: 16,
+    shadowColor: '#000000',
+    shadowOpacity: 0.28,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 9,
+    zIndex: 50,
+  },
+
+  toastIcone: {
+    width: 28,
+    height: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: '#FFFFFF',
+    borderRadius: 14,
+    marginRight: 11,
+  },
+
+  toastTexto: {
+    flex: 1,
+    color: '#FFFFFF',
+    fontFamily: 'Poppins_600SemiBold',
+    fontSize: 12.5,
   },
 
   // Centraliza as mensagens de carregamento e erro

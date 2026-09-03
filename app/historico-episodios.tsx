@@ -1,182 +1,119 @@
-// PÁGINA DE PERFIL DO USUÁRIO
+// PÁGINA DE HISTÓRICO DE EPISÓDIOS ASSISTIDOS
 
-// Hooks utilizados para carregar novamente os dados ao retornar para a página
-import { useCallback, useState } from 'react';
-// Componentes visuais utilizados na página
+import { Ionicons } from '@expo/vector-icons';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { useCallback, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
-  Image,
-  ScrollView,
+  FlatList,
   Text,
   TouchableOpacity,
   View,
 } from 'react-native';
-// Ícones utilizados nas informações e atalhos
-import { Ionicons } from '@expo/vector-icons';
-// Navegação e evento disparado quando a página recebe foco
-import { useFocusEffect, useRouter } from 'expo-router';
-// Mantém o conteúdo distante das barras do aparelho
 import { SafeAreaView } from 'react-native-safe-area-context';
-// Cliente responsável pela autenticação e dados da conta
-import { supabase } from '../lib/supabase';
-// Recupera as séries armazenadas na lista pessoal
-import {
-  buscarMinhaLista,
-  type ItemMinhaLista,
-} from '../services/minha-lista.service';
-// Recupera todo o histórico de episódios assistidos
+
 import {
   buscarHistoricoAssistido,
   type RegistroEpisodioAssistido,
 } from '../services/episodios-assistidos.service';
-// Estilos exclusivos da página
-import { styles } from '../styles/perfil.styles';
+import { buscarDetalhesSerie } from '../services/tmdb.service';
+import { styles } from '../styles/historico-episodios.styles';
 
-
-// Estrutura utilizada para guardar os números apresentados no perfil
-interface EstatisticasPerfil {
-  totalSeries: number;
-  assistindo: number;
-  queroAssistir: number;
-  pausadas: number;
-  reassistindo: number;
-  abandonadas: number;
-  episodiosAssistidos: number;
+interface ItemHistorico extends RegistroEpisodioAssistido {
+  nomeSerie: string;
 }
 
-// Valores utilizados antes do carregamento dos dados reais
-const estatisticasIniciais: EstatisticasPerfil = {
-  totalSeries: 0,
-  assistindo: 0,
-  queroAssistir: 0,
-  pausadas: 0,
-  reassistindo: 0,
-  abandonadas: 0,
-  episodiosAssistidos: 0,
-};
+interface GrupoHistorico {
+  titulo: string;
+  dados: ItemHistorico[];
+}
 
-// Página responsável por apresentar os dados pessoais e estatísticas do usuário
-export default function Perfil() {
-  // Permite navegar pelas áreas relacionadas à conta
+function formatarDataHora(data: string): string {
+  const valor = new Date(data);
+
+  if (Number.isNaN(valor.getTime())) {
+    return '';
+  }
+
+  return valor.toLocaleString('pt-BR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function chaveDia(data: string): string {
+  const valor = new Date(data);
+
+  if (Number.isNaN(valor.getTime())) {
+    return 'Sem data';
+  }
+
+  return valor.toLocaleDateString('pt-BR', {
+    day: '2-digit',
+    month: 'long',
+    year: 'numeric',
+  });
+}
+
+export default function HistoricoEpisodios() {
   const router = useRouter();
 
-  // Guarda os dados básicos da conta autenticada
-  const [nomeUsuario, setNomeUsuario] = useState('Usuária');
-  const [emailUsuario, setEmailUsuario] = useState('');
-  const [nomePerfil, setNomePerfil] = useState('');
-  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
-  const [membroDesde, setMembroDesde] = useState('');
-
-  // Guarda os valores calculados a partir dos registros do Supabase
-  const [estatisticas, setEstatisticas] =
-    useState<EstatisticasPerfil>(estatisticasIniciais);
-
-  // Controla os estados da consulta
+  const [itens, setItens] = useState<ItemHistorico[]>([]);
   const [carregando, setCarregando] = useState(true);
   const [mensagemErro, setMensagemErro] = useState('');
+  const [tentativa, setTentativa] = useState(0);
 
-  // Calcula os números apresentados na página utilizando apenas dados reais
-  function calcularEstatisticas(
-    lista: ItemMinhaLista[],
-    historico: RegistroEpisodioAssistido[]
-  ): EstatisticasPerfil {
-    return {
-      totalSeries: lista.length,
-      assistindo: lista.filter(
-        (item) => item.status_usuario === 'assistindo'
-      ).length,
-      queroAssistir: lista.filter(
-        (item) => item.status_usuario === 'quero_assistir'
-      ).length,
-      pausadas: lista.filter(
-        (item) => item.status_usuario === 'pausada'
-      ).length,
-      reassistindo: lista.filter(
-        (item) => item.status_usuario === 'reassistindo'
-      ).length,
-      abandonadas: lista.filter(
-        (item) => item.status_usuario === 'abandonada'
-      ).length,
-      episodiosAssistidos: historico.length,
-    };
-  }
-
-  // Converte a data da conta em um texto curto para o perfil
-  function formatarDataMembro(data: string | undefined): string {
-    if (!data) {
-      return 'Data não disponível';
-    }
-
-    const dataConta = new Date(data);
-
-    const texto = dataConta.toLocaleDateString('pt-BR', {
-      month: 'long',
-      year: 'numeric',
-    });
-
-    return texto.charAt(0).toUpperCase() + texto.slice(1);
-  }
-
-  // Carrega novamente o perfil sempre que o usuário entrar ou retornar à página
   useFocusEffect(
     useCallback(() => {
       let paginaAtiva = true;
 
-      async function carregarPerfil() {
+      async function carregarHistorico() {
         try {
           setCarregando(true);
           setMensagemErro('');
 
-          // Recupera a conta conectada
-          const {
-            data: dadosUsuario,
-            error: erroUsuario,
-          } = await supabase.auth.getUser();
+          const historico = await buscarHistoricoAssistido();
 
-          if (erroUsuario || !dadosUsuario.user) {
-            throw new Error('Não foi possível carregar sua conta.');
-          }
+          const idsSeries = Array.from(
+            new Set(historico.map((item) => item.serie_id))
+          );
 
-          // Carrega a lista e o histórico simultaneamente
-          const [lista, historico] = await Promise.all([
-            buscarMinhaLista(),
-            buscarHistoricoAssistido(),
-          ]);
+          const nomesPorSerie = new Map<number, string>();
+
+          await Promise.all(
+            idsSeries.map(async (serieId) => {
+              try {
+                const detalhes = await buscarDetalhesSerie(serieId);
+                nomesPorSerie.set(serieId, detalhes.name);
+              } catch (erro) {
+                console.log(
+                  `Erro ao buscar nome da série ${serieId} no histórico:`,
+                  erro
+                );
+                nomesPorSerie.set(serieId, 'Série');
+              }
+            })
+          );
 
           if (!paginaAtiva) {
             return;
           }
 
-          const usuario = dadosUsuario.user;
+          const resultado: ItemHistorico[] = historico.map((item) => ({
+            ...item,
+            nomeSerie: nomesPorSerie.get(item.serie_id) ?? 'Série',
+          }));
 
-          // Prioriza o nome salvo nos metadados do cadastro
-          const nomeCadastrado = usuario.user_metadata?.nome;
-          const nomeDoEmail = usuario.email?.split('@')[0] ?? 'usuario';
-
-          const nomeExibicao =
-            typeof nomeCadastrado === 'string' && nomeCadastrado.trim()
-              ? nomeCadastrado.trim()
-              : nomeDoEmail;
-
-          // Recupera o avatar salvo nos metadados, quando existir
-          const imagemAvatar =
-            typeof usuario.user_metadata?.avatar_url === 'string'
-              ? usuario.user_metadata.avatar_url
-              : null;
-
-          setNomeUsuario(nomeExibicao);
-          setEmailUsuario(usuario.email ?? '');
-          setNomePerfil(nomeDoEmail);
-          setAvatarUrl(imagemAvatar);
-          setMembroDesde(formatarDataMembro(usuario.created_at));
-          setEstatisticas(calcularEstatisticas(lista, historico));
+          setItens(resultado);
         } catch (erro) {
-          console.log('Erro ao carregar perfil:', erro);
+          console.log('Erro ao carregar histórico de episódios:', erro);
 
           if (paginaAtiva) {
-            setEstatisticas(estatisticasIniciais);
-            setMensagemErro('Não foi possível carregar seu perfil.');
+            setItens([]);
+            setMensagemErro('Não foi possível carregar seu histórico.');
           }
         } finally {
           if (paginaAtiva) {
@@ -185,268 +122,173 @@ export default function Perfil() {
         }
       }
 
-      carregarPerfil();
+      carregarHistorico();
 
       return () => {
         paginaAtiva = false;
       };
-    }, [])
+    }, [tentativa])
   );
 
-  // Encerra a sessão do usuário após confirmação
-  function confirmarSaida() {
-    Alert.alert(
-      'Sair do Gabiflix?',
-      'Você precisará entrar novamente para acessar sua conta.',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Sair',
-          style: 'destructive',
-          onPress: async () => {
-            const { error } = await supabase.auth.signOut();
+  const grupos = useMemo<GrupoHistorico[]>(() => {
+    const mapa = new Map<string, ItemHistorico[]>();
 
-            if (error) {
-              Alert.alert('Não foi possível sair', 'Tente novamente.');
-              return;
-            }
+    itens.forEach((item) => {
+      const titulo = chaveDia(item.assistido_em);
+      const atuais = mapa.get(titulo) ?? [];
+      atuais.push(item);
+      mapa.set(titulo, atuais);
+    });
 
-            router.replace('/');
-          },
-        },
-      ]
-    );
-  }
+    return Array.from(mapa.entries()).map(([titulo, dados]) => ({
+      titulo,
+      dados,
+    }));
+  }, [itens]);
 
-  // Exibe um estado centralizado enquanto os dados são preparados
-  if (carregando) {
-    return (
-      <View style={styles.estadoCentralizado}>
-        <ActivityIndicator size="large" color="#E91E63" />
-        <Text style={styles.textoEstado}>Carregando seu perfil...</Text>
-      </View>
-    );
-  }
-
-  // Exibe uma mensagem quando não for possível consultar os dados
-  if (mensagemErro) {
-    return (
-      <SafeAreaView
-        style={styles.estadoCentralizado}
-        edges={['top', 'bottom']}
-      >
-        <Ionicons
-          name="alert-circle-outline"
-          size={44}
-          color="#F48FB1"
-        />
-
-        <Text style={styles.textoErro}>{mensagemErro}</Text>
-
-        <TouchableOpacity
-          style={styles.botaoVoltarErro}
-          activeOpacity={0.8}
-          onPress={router.back}
-        >
-          <Text style={styles.textoBotaoVoltarErro}>Voltar</Text>
-        </TouchableOpacity>
-      </SafeAreaView>
-    );
-  }
+  const dadosFlat = useMemo(() => {
+    return grupos.flatMap((grupo) => [
+      { tipo: 'grupo' as const, titulo: grupo.titulo },
+      ...grupo.dados.map((item) => ({
+        tipo: 'episodio' as const,
+        item,
+      })),
+    ]);
+  }, [grupos]);
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-      {/* Cabeçalho da página */}
       <View style={styles.cabecalho}>
         <TouchableOpacity
-          style={styles.botaoCabecalho}
+          style={styles.botaoVoltar}
           activeOpacity={0.7}
-          onPress={router.back}
+          onPress={() => router.back()}
           accessibilityLabel="Voltar"
         >
           <Ionicons name="chevron-back" size={26} color="#E91E63" />
         </TouchableOpacity>
 
-        <Text style={styles.tituloCabecalho}>Perfil</Text>
-
-        {/* Engrenagem que abre a página própria de configurações */}
-        <TouchableOpacity
-          style={styles.botaoCabecalho}
-          activeOpacity={0.7}
-          onPress={() => router.push('/configuracoes')}
-          accessibilityLabel="Configurações"
-        >
-          <Ionicons name="settings-outline" size={22} color="#E91E63" />
-        </TouchableOpacity>
-      </View>
-
-      <ScrollView
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.conteudo}
-      >
-        {/* Área principal com avatar e identificação da conta */}
-        <View style={styles.perfilPrincipal}>
-          <View style={styles.bordaAvatar}>
-            {avatarUrl ? (
-              <Image
-                source={{ uri: avatarUrl }}
-                style={styles.avatarImagem}
-                resizeMode="cover"
-              />
-            ) : (
-              <View style={styles.avatarPadrao}>
-                <Text style={styles.inicialAvatar}>
-                  {nomeUsuario.charAt(0).toUpperCase()}
-                </Text>
-              </View>
-            )}
-          </View>
-
-          <Text style={styles.nomeUsuario}>{nomeUsuario} 💕</Text>
-          <Text style={styles.nomePerfil}>@{nomePerfil}</Text>
-
-          {emailUsuario ? (
-            <Text style={styles.email}>{emailUsuario}</Text>
-          ) : null}
-
-          <View style={styles.seloMembro}>
-            <Text style={styles.textoSeloMembro}>
-              Membro desde {membroDesde}
-            </Text>
-          </View>
-        </View>
-
-        {/* Resumo rápido inspirado na referência visual */}
-        <View style={styles.resumoRapido}>
-          <View style={styles.itemResumo}>
-            <Text style={styles.numeroResumo}>{estatisticas.assistindo}</Text>
-            <Text style={styles.textoResumo}>Assistindo</Text>
-          </View>
-
-          <View style={styles.divisorResumo} />
-
-          <View style={styles.itemResumo}>
-            <Text style={styles.numeroResumo}>
-              {estatisticas.queroAssistir}
-            </Text>
-            <Text style={styles.textoResumo}>Quero assistir</Text>
-          </View>
-
-
-        </View>
-
-        {/* Cabeçalho da área de estatísticas */}
-        <View style={styles.cabecalhoEstatisticas}>
-          <Text style={styles.tituloSecao}>Estatísticas</Text>
-        </View>
-
-        {/* Cards calculados com informações reais já disponíveis no Supabase */}
-        <View style={styles.gradeEstatisticas}>
-          <View style={styles.cardEstatistica}>
-            <View style={styles.iconeEstatistica}>
-              <Ionicons name="tv-outline" size={20} color="#E91E63" />
-            </View>
-            <Text style={styles.rotuloEstatistica}>Séries</Text>
-            <Text style={styles.valorEstatistica}>
-              {estatisticas.totalSeries}
-            </Text>
-          </View>
-
-          <View style={styles.cardEstatistica}>
-            <View style={styles.iconeEstatistica}>
-              <Ionicons
-                name="checkmark-circle-outline"
-                size={20}
-                color="#E91E63"
-              />
-            </View>
-            <Text style={styles.rotuloEstatistica}>Episódios</Text>
-            <Text style={styles.valorEstatistica}>
-              {estatisticas.episodiosAssistidos}
-            </Text>
-          </View>
-
-          <View style={styles.cardEstatistica}>
-            <View style={styles.iconeEstatistica}>
-              <Ionicons
-                name="pause-circle-outline"
-                size={20}
-                color="#E91E63"
-              />
-            </View>
-            <Text style={styles.rotuloEstatistica}>Pausadas</Text>
-            <Text style={styles.valorEstatistica}>
-              {estatisticas.pausadas}
-            </Text>
-          </View>
-
-          <View style={styles.cardEstatistica}>
-            <View style={styles.iconeEstatistica}>
-              <Ionicons name="refresh-outline" size={20} color="#E91E63" />
-            </View>
-            <Text style={styles.rotuloEstatistica}>Reassistindo</Text>
-            <Text style={styles.valorEstatistica}>
-              {estatisticas.reassistindo}
-            </Text>
-          </View>
-        </View>
-
-        {/* Informação complementar sem ocupar os cards principais */}
-        <View style={styles.cardSecundario}>
-          <View style={styles.cardSecundarioEsquerda}>
-            <Ionicons
-              name="close-circle-outline"
-              size={20}
-              color="#F48FB1"
-            />
-            <Text style={styles.textoCardSecundario}>
-              Séries abandonadas
-            </Text>
-          </View>
-
-          <Text style={styles.valorCardSecundario}>
-            {estatisticas.abandonadas}
+        <View>
+          <Text style={styles.titulo}>Histórico de episódios</Text>
+          <Text style={styles.subtitulo}>
+            {itens.length} {itens.length === 1 ? 'episódio assistido' : 'episódios assistidos'}
           </Text>
         </View>
+      </View>
 
-        {/* Atalhos relacionados à atividade do usuário e à conta */}
-        <View style={styles.acoesConta}>
+      {carregando ? (
+        <View style={styles.estadoCentralizado}>
+          <ActivityIndicator size="large" color="#E91E63" />
+          <Text style={styles.textoEstado}>
+            Carregando seu histórico...
+          </Text>
+        </View>
+      ) : mensagemErro ? (
+        <View style={styles.estadoCentralizado}>
+          <Ionicons
+            name="alert-circle-outline"
+            size={44}
+            color="#F48FB1"
+          />
+
+          <Text style={styles.textoEstado}>{mensagemErro}</Text>
+
           <TouchableOpacity
-            style={styles.botaoConta}
+            style={styles.botaoTentar}
             activeOpacity={0.8}
-            onPress={() => router.push('/historico-episodios')}
+            onPress={() => setTentativa((valor) => valor + 1)}
           >
-            <Ionicons
-              name="time-outline"
-              size={21}
-              color="#F48FB1"
-            />
-
-            <Text style={styles.textoBotaoConta}>
-              Histórico de episódios
+            <Text style={styles.textoBotaoTentar}>
+              Tentar novamente
             </Text>
-
-            <Ionicons
-              name="chevron-forward"
-              size={19}
-              color="#666666"
-            />
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.botaoConta, styles.botaoSair]}
-            activeOpacity={0.8}
-            onPress={confirmarSaida}
-          >
-            <Ionicons
-              name="log-out-outline"
-              size={21}
-              color="#FF6B81"
-            />
-            <Text style={styles.textoBotaoSair}>Sair da conta</Text>
           </TouchableOpacity>
         </View>
-      </ScrollView>
+      ) : itens.length === 0 ? (
+        <View style={styles.estadoVazio}>
+          <Ionicons
+            name="time-outline"
+            size={52}
+            color="#E91E63"
+          />
+
+          <Text style={styles.tituloVazio}>
+            Nenhum episódio no histórico
+          </Text>
+
+          <Text style={styles.textoVazio}>
+            Quando você marcar episódios como assistidos, eles aparecerão aqui.
+          </Text>
+        </View>
+      ) : (
+        <FlatList
+          data={dadosFlat}
+          keyExtractor={(registro, indice) =>
+            registro.tipo === 'grupo'
+              ? `grupo-${registro.titulo}`
+              : `episodio-${registro.item.id}-${indice}`
+          }
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={styles.lista}
+          renderItem={({ item: registro }) => {
+            if (registro.tipo === 'grupo') {
+              return (
+                <Text style={styles.tituloGrupo}>
+                  {registro.titulo}
+                </Text>
+              );
+            }
+
+            const item = registro.item;
+
+            return (
+              <TouchableOpacity
+                style={styles.card}
+                activeOpacity={0.82}
+                onPress={() =>
+                  router.push({
+                    pathname: '/serie/[id]',
+                    params: {
+                      id: String(item.serie_id),
+                      temporada: String(item.temporada_numero),
+                    },
+                  })
+                }
+              >
+                <View style={styles.iconeHistorico}>
+                  <Ionicons
+                    name="checkmark"
+                    size={20}
+                    color="#5DD39E"
+                  />
+                </View>
+
+                <View style={styles.dados}>
+                  <Text
+                    style={styles.nomeEpisodio}
+                    numberOfLines={2}
+                  >
+                    {item.episodio_numero}. {item.episodio_nome}
+                  </Text>
+
+                  <Text style={styles.referencia}>
+                    {item.nomeSerie} • T{item.temporada_numero} E{item.episodio_numero}
+                  </Text>
+
+                  <Text style={styles.data}>
+                    Marcado em {formatarDataHora(item.assistido_em)}
+                  </Text>
+                </View>
+
+                <Ionicons
+                  name="chevron-forward"
+                  size={18}
+                  color="#666666"
+                />
+              </TouchableOpacity>
+            );
+          }}
+        />
+      )}
     </SafeAreaView>
   );
 }

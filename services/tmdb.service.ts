@@ -84,13 +84,7 @@ const opcoesRequisicao = {
   },
 };
 
-
-// -----------------------------------------------------------------------------
-// CACHE EM MEMÓRIA
-// Evita repetir a mesma chamada ao TMDB enquanto o aplicativo permanece aberto.
-// Também reaproveita uma requisição que já esteja em andamento para a mesma URL.
-// -----------------------------------------------------------------------------
-
+// Cache em memória
 interface EntradaCache<T> {
   dados: T;
   expiraEm: number;
@@ -130,10 +124,14 @@ async function buscarJsonComCache<T>(
   const promessa = (async () => {
     const resposta = await fetch(url, opcoesRequisicao);
 
-    if (!resposta.ok) {
-      throw new Error(`Erro do TMDB: ${resposta.status}`);
-    }
+   if (!resposta.ok) {
+  const erro = await resposta.text();
 
+  console.log('URL TMDB COM ERRO:', url);
+  console.log('RESPOSTA TMDB:', erro);
+
+  throw new Error(`Erro do TMDB: ${resposta.status}`);
+}
     const dados = (await resposta.json()) as T;
 
     cacheTmdb.set(url, {
@@ -230,6 +228,16 @@ export type PeriodoDescoberta =
   | 'mes'
   | 'todos';
 
+// Networks do TMDB usadas como complemento no filtro "Em breve".
+// Séries futuras nem sempre possuem watch_provider cadastrado antes da estreia.
+const NETWORKS_EM_BREVE_POR_PROVEDOR: Record<number, number[]> = {
+  8: [213],       // Netflix
+  9: [1024],      // Prime Video
+  337: [2739],    // Disney+
+  350: [2552],    // Apple TV+
+  531: [4330],    // Paramount+
+};
+
 // Descobre séries por gênero, período, streaming, país de origem e ordenação
 export async function buscarSeriesPorGeneroPeriodo(
   generoId: number | null,
@@ -239,7 +247,8 @@ export async function buscarSeriesPorGeneroPeriodo(
   ordenacao:
     | 'recentes'
     | 'populares'
-    | 'avaliados' = 'recentes',
+    | 'avaliados'
+    | 'em_breve' = 'recentes',
   pagina: number = 1
 ): Promise<RespostaSeries> {
   if (!TOKEN_TMDB) {
@@ -306,9 +315,17 @@ export async function buscarSeriesPorGeneroPeriodo(
   let url =
     `${URL_BASE}/discover/tv?language=pt-BR` +
     `&page=${pagina}` +
-    `&watch_region=BR` +
-    `&with_watch_monetization_types=flatrate|free|ads` +
     `&include_null_first_air_dates=false`;
+
+
+  if (
+    provedorId === null &&
+    ordenacao !== 'em_breve'
+  ) {
+    url +=
+      `&watch_region=BR` +
+      `&with_watch_monetization_types=flatrate|free|ads`;
+  }
 
   // "Todos" não envia with_genres, permitindo descobrir qualquer gênero.
   if (generoId !== null) {
@@ -322,7 +339,17 @@ export async function buscarSeriesPorGeneroPeriodo(
 
   // Quando um streaming é escolhido, restringe a descoberta ao catálogo
   // que o TMDB registra para esse provedor no Brasil.
-  if (provedorId !== null) {
+  //
+  // No "Em breve", a busca é tratada mais abaixo de forma híbrida:
+  // watch provider + network. Isso ajuda a encontrar séries futuras que já
+  // foram anunciadas por uma plataforma, mas ainda não receberam no TMDB
+  // os dados completos de disponibilidade para o Brasil.
+  if (
+    provedorId !== null &&
+    ordenacao !== 'em_breve'
+  ) {
+    url += `&watch_region=BR`;
+    url += `&with_watch_monetization_types=flatrate|free|ads`;
     url += `&with_watch_providers=${provedorId}`;
   }
 
@@ -331,7 +358,9 @@ export async function buscarSeriesPorGeneroPeriodo(
       ? 'vote_average.desc'
       : ordenacao === 'populares'
         ? 'popularity.desc'
-        : 'first_air_date.desc';
+        : ordenacao === 'em_breve'
+          ? 'popularity.desc'
+          : 'first_air_date.desc';
 
   url += `&sort_by=${ordenarPor}`;
 
@@ -339,7 +368,13 @@ export async function buscarSeriesPorGeneroPeriodo(
     url += '&vote_count.gte=50';
   }
 
-  if (
+  if (ordenacao === 'em_breve') {
+    // "Em breve": somente séries cuja primeira estreia ainda não aconteceu.
+    const amanha = new Date(hoje);
+    amanha.setDate(amanha.getDate() + 1);
+
+    url += `&first_air_date.gte=${formatarData(amanha)}`;
+  } else if (
     periodo !== 'todos' &&
     dataInicial &&
     dataFinal
@@ -347,6 +382,138 @@ export async function buscarSeriesPorGeneroPeriodo(
     url +=
       `&first_air_date.gte=${dataInicial}` +
       `&first_air_date.lte=${dataFinal}`;
+  }
+
+  if (ordenacao === 'em_breve') {
+    // No "Em breve", usamos duas fontes quando há um streaming selecionado:
+    // 1) watch provider, quando o TMDB já cadastrou a disponibilidade;
+    // 2) network, para séries futuras já anunciadas pela própria plataforma.
+    //
+    // Depois unimos tudo por ID, evitando séries duplicadas.
+    const urlsBase: string[] = [];
+
+    if (provedorId !== null) {
+      urlsBase.push(
+        url +
+          `&watch_region=BR` +
+          `&with_watch_providers=${provedorId}`
+      );
+
+      const networks =
+        NETWORKS_EM_BREVE_POR_PROVEDOR[provedorId] ?? [];
+
+      if (networks.length > 0) {
+        urlsBase.push(
+          url +
+            `&with_networks=${networks.join('|')}`
+        );
+      }
+    } else {
+      urlsBase.push(url);
+    }
+
+    const buscarPaginasDaFonte = async (
+      urlBase: string
+    ): Promise<RespostaSeries[]> => {
+      const urlPrimeiraPagina = urlBase.replace(
+        /&page=\d+/,
+        '&page=1'
+      );
+
+      const primeiraResposta =
+        await buscarJsonComCache<RespostaSeries>(
+          urlPrimeiraPagina,
+          TEMPO_CACHE.catalogo
+        );
+
+      // Nunca solicita páginas que não existem no TMDB.
+      const quantidadePaginas = Math.min(
+        Math.max(primeiraResposta.total_pages ?? 1, 1),
+        20
+      );
+
+      const paginasRestantes = Array.from(
+        { length: Math.max(quantidadePaginas - 1, 0) },
+        (_, indice) => indice + 2
+      );
+
+      const demaisRespostas = await Promise.all(
+        paginasRestantes.map((numeroPagina) => {
+          const urlPagina = urlBase.replace(
+            /&page=\d+/,
+            `&page=${numeroPagina}`
+          );
+
+          return buscarJsonComCache<RespostaSeries>(
+            urlPagina,
+            TEMPO_CACHE.catalogo
+          );
+        })
+      );
+
+      return [
+        primeiraResposta,
+        ...demaisRespostas,
+      ];
+    };
+
+    const respostasPorFonte = await Promise.all(
+      urlsBase.map(buscarPaginasDaFonte)
+    );
+
+    const respostas = respostasPorFonte.flat();
+
+    const unicos = new Map<number, RespostaSeries['results'][number]>();
+
+    respostas.forEach((resposta) => {
+      resposta.results.forEach((serie) => {
+        if (!serie.first_air_date) {
+          return;
+        }
+
+        if (!unicos.has(serie.id)) {
+          unicos.set(serie.id, serie);
+        }
+      });
+    });
+
+    const candidatos = Array.from(unicos.values());
+
+    const pontuar = (serie: RespostaSeries['results'][number]) => {
+      let pontos = 0;
+
+      if (serie.poster_path) pontos += 4;
+      if (serie.overview?.trim()) pontos += 3;
+      if (serie.name?.trim()) pontos += 1;
+
+      // Popularidade ajuda a trazer títulos mais conhecidos, mas não domina
+      // sozinha o ranking. Assim séries novas ainda conseguem aparecer.
+      pontos += Math.min(Number(serie.popularity ?? 0), 2000) / 500;
+
+      return pontos;
+    };
+
+    const resultados = candidatos
+      .filter((serie) => Boolean(serie.first_air_date))
+      .sort((a, b) => {
+        const diferencaQualidade = pontuar(b) - pontuar(a);
+
+        if (Math.abs(diferencaQualidade) > 0.001) {
+          return diferencaQualidade;
+        }
+
+        return (a.first_air_date ?? '').localeCompare(
+          b.first_air_date ?? ''
+        );
+      })
+      .slice(0, 80);
+
+    return {
+      page: 1,
+      results: resultados,
+      total_pages: 1,
+      total_results: resultados.length,
+    };
   }
 
   return buscarJsonComCache<RespostaSeries>(
@@ -381,10 +548,6 @@ export async function buscarSeries(
   );
 }
 
-
-// Localiza uma série do TMDB utilizando o ID da série no TVDB.
-// O export do TV Time fornece esse ID, então esta é a forma mais segura
-// de associar os registros sem depender somente do nome da série.
 export async function buscarSeriePorTvdbId(
   tvdbId: number
 ): Promise<SerieEncontradaPorIdExterno | null> {

@@ -41,7 +41,9 @@ export const styles = StyleSheet.create({
     paddingBottom: 32,
   },
 
-  listaVazia: { justifyContent: 'center' },
+  listaVazia: {
+    flexGrow: 0,
+  },
 
   card: {
     minHeight: 174,
@@ -69,7 +71,21 @@ export const styles = StyleSheet.create({
     backgroundColor: '#242424',
   },
 
-  dadosCard: { flex: 1, padding: 14 },
+  dadosCard: { flex: 1, padding: 14, paddingRight: 58 },
+
+  botaoMarcarAssistido: {
+    position: 'absolute',
+    right: 12,
+    top: 12,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#202020',
+    borderWidth: 1,
+    borderColor: '#3A3A3A',
+  },
 
   nomeSerie: {
     color: '#FFFFFF',
@@ -186,12 +202,22 @@ export const styles = StyleSheet.create({
     textAlign: 'center',
   },
 
-  estadoVazio: { alignItems: 'center', paddingHorizontal: 25 },
+  estadoVazio: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#181818',
+    borderWidth: 1,
+    borderColor: '#2B2B2B',
+    borderRadius: 18,
+    marginTop: 4,
+    paddingHorizontal: 26,
+    paddingVertical: 30,
+  },
 
   tituloVazio: {
     color: '#FFFFFF',
     fontFamily: 'Poppins_600SemiBold',
-    fontSize: 18,
+    fontSize: 17,
     marginTop: 12,
   },
 
@@ -199,8 +225,9 @@ export const styles = StyleSheet.create({
     color: '#9E9E9E',
     fontFamily: 'Poppins_400Regular',
     fontSize: 13,
-    lineHeight: 20,
+    lineHeight: 19,
     marginTop: 7,
+    maxWidth: 285,
     textAlign: 'center',
   },
 

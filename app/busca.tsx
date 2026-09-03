@@ -58,7 +58,8 @@ const generos: GeneroBusca[] = [
 type OrdenacaoExplorar =
   | 'recentes'
   | 'populares'
-  | 'avaliados';
+  | 'avaliados'
+  | 'em_breve';
 
 const opcoesOrdenacao: {
   valor: OrdenacaoExplorar;
@@ -67,6 +68,7 @@ const opcoesOrdenacao: {
   { valor: 'recentes', titulo: 'Mais recentes' },
   { valor: 'populares', titulo: 'Mais populares' },
   { valor: 'avaliados', titulo: 'Melhor avaliados' },
+  { valor: 'em_breve', titulo: 'Em breve' },
 ];
 
 // Mantém na barra apenas os streamings mais úteis no Brasil.
@@ -219,22 +221,24 @@ export default function Busca() {
             return;
           }
 
-          const resposta =
+          // Todos os filtros, inclusive "Em breve", usam a mesma função.
+          // O tmdb.service é responsável por aplicar a regra específica de cada
+          // ordenação, preservando gênero, país de origem e streaming.
+          const resultadosTratados = (
             await buscarSeriesPorGeneroPeriodo(
               generoSelecionado.id,
               'todos',
               provedorSelecionado,
               generoSelecionado.paisOrigem ?? null,
               ordenacaoSelecionada
-            );
+            )
+          ).results;
 
           if (!ativo) {
             return;
           }
 
-          setResultadosDescoberta(
-            resposta.results
-          );
+          setResultadosDescoberta(resultadosTratados);
           setResultados([]);
         } catch (erro) {
           console.log(
@@ -307,6 +311,13 @@ export default function Busca() {
         ? serie.vote_average.toFixed(1)
         : '—';
 
+    const dataEstreia =
+      serie.first_air_date
+        ? new Date(`${serie.first_air_date}T00:00:00`).toLocaleDateString(
+            'pt-BR'
+          )
+        : null;
+
     return (
       <TouchableOpacity
         key={serie.id}
@@ -339,23 +350,40 @@ export default function Busca() {
           </Text>
 
           <View style={styles.informacoes}>
-            <Text style={styles.ano}>
-              {ano}
-            </Text>
+            {ordenacaoSelecionada === 'em_breve' ? (
+              <>
+                <Ionicons
+                  name="calendar-outline"
+                  size={13}
+                  color="#E91E63"
+                />
+                <Text style={styles.ano}>
+                  {dataEstreia
+                    ? `Estreia em ${dataEstreia}`
+                    : `Prevista para ${ano}`}
+                </Text>
+              </>
+            ) : (
+              <>
+                <Text style={styles.ano}>
+                  {ano}
+                </Text>
 
-            <View style={styles.separador} />
+                <View style={styles.separador} />
 
-            <View style={styles.avaliacao}>
-              <Ionicons
-                name="star"
-                size={13}
-                color="#E91E63"
-              />
+                <View style={styles.avaliacao}>
+                  <Ionicons
+                    name="star"
+                    size={13}
+                    color="#E91E63"
+                  />
 
-              <Text style={styles.nota}>
-                {nota}
-              </Text>
-            </View>
+                  <Text style={styles.nota}>
+                    {nota}
+                  </Text>
+                </View>
+              </>
+            )}
           </View>
 
           <Text

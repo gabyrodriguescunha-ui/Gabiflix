@@ -148,6 +148,15 @@ export const styles = StyleSheet.create({
     backgroundColor: '#242424',
   },
 
+
+  // Logo Gabiflix exibida quando o TMDB não possui imagem do episódio
+  // ou quando a imagem remota falha ao carregar.
+  logoSemImagem: {
+    width: 48,
+    height: 48,
+    opacity: 0.92,
+  },
+
   // Informações localizadas ao lado da imagem
   dadosCard: {
     flex: 1,

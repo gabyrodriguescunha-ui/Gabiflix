@@ -10,6 +10,7 @@ export interface Serie {
   first_air_date: string;
   vote_average: number;
   genre_ids: number[];
+  popularity: number;
 }
 
 // Representa a resposta paginada enviada pelo TMDB
@@ -33,6 +34,7 @@ export interface TemporadaResumo {
   season_number: number;
   episode_count: number;
   poster_path: string | null;
+  air_date: string | null;
 }
 
 // Representa os dados completos da série selecionada

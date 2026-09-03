@@ -7,6 +7,7 @@ import {
   ActivityIndicator,
   FlatList,
   Image,
+  RefreshControl,
   Text,
   TouchableOpacity,
   View,
@@ -15,6 +16,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 // Histórico salvo pelo usuário no Supabase
 import {
   buscarHistoricoAssistido,
+  marcarEpisodiosAssistidos,
   type RegistroEpisodioAssistido,
 } from '../services/episodios-assistidos.service';
 import {
@@ -27,6 +29,7 @@ import {
   obterUrlCapa,
 } from '../services/tmdb.service';
 import { styles } from '../styles/continuar-assistindo.styles';
+import type { Episodio } from '../types/serie';
 
 
 // Informações prontas para serem exibidas em cada card
@@ -36,6 +39,7 @@ interface ItemContinuarAssistindo {
   posterPath: string | null;
   temporadaNumero: number;
   proximoEpisodioNumero: number | null;
+  proximoEpisodio: Episodio | null;
   proximoEpisodioNome: string;
   proximoEpisodioData: string | null;
   aguardandoEstreia: boolean;
@@ -109,6 +113,8 @@ export default function ContinuarAssistindo() {
   const [mensagemErro, setMensagemErro] = useState('');
   // Permite refazer o carregamento quando ocorrer uma falha
   const [tentativaCarregamento, setTentativaCarregamento] = useState(0);
+  const [atualizando, setAtualizando] = useState(false);
+  const [episodioSendoMarcado, setEpisodioSendoMarcado] = useState<number | null>(null);
 
   // Recarrega o progresso sempre que a página volta a ficar visível
   useFocusEffect(
@@ -142,6 +148,11 @@ export default function ContinuarAssistindo() {
             number,
             RegistroEpisodioAssistido[]
           >();
+
+          // Inclui também séries recém-adicionadas, mesmo sem histórico ainda.
+          idsSeriesAcompanhadas.forEach((serieId) => {
+            registrosPorSerie.set(serieId, []);
+          });
 
           historico.forEach((registro) => {
             if (!idsSeriesAcompanhadas.has(registro.serie_id)) {
@@ -193,6 +204,7 @@ export default function ContinuarAssistindo() {
                   let proximoEpisodioNumero:
                     | number
                     | null = null;
+                  let proximoEpisodio: Episodio | null = null;
 
                   let proximoEpisodioNome =
                     'Tudo assistido até agora';
@@ -282,6 +294,7 @@ export default function ContinuarAssistindo() {
                         resumoTemporada.season_number;
                       proximoEpisodioNumero =
                         proximo.episode_number;
+                      proximoEpisodio = proximo;
                       proximoEpisodioNome =
                         proximo.name;
                       proximoEpisodioData =
@@ -336,6 +349,8 @@ export default function ContinuarAssistindo() {
                       primeiroFuturo.temporadaNumero;
                     proximoEpisodioNumero =
                       primeiroFuturo.episodioNumero;
+                    // Episódios futuros não podem ser marcados como assistidos.
+                    proximoEpisodio = null;
                     proximoEpisodioNome =
                       primeiroFuturo.episodioNome;
                     proximoEpisodioData =
@@ -400,6 +415,7 @@ export default function ContinuarAssistindo() {
                     temporadaNumero:
                       temporadaDestino,
                     proximoEpisodioNumero,
+                    proximoEpisodio,
                     proximoEpisodioNome,
                     proximoEpisodioData,
                     aguardandoEstreia,
@@ -440,6 +456,7 @@ export default function ContinuarAssistindo() {
         } finally {
           if (paginaAtiva) {
             setCarregando(false);
+            setAtualizando(false);
           }
         }
       }
@@ -453,8 +470,8 @@ export default function ContinuarAssistindo() {
   );
 
   // "Para assistir": existe um episódio já lançado e ainda não visto.
-  // "Em breve": o próximo episódio é futuro OU a série continua ativa,
-  // mas o TMDB ainda não cadastrou um próximo episódio.
+  // "Em breve": somente quando o TMDB cadastrou um próximo episódio
+  // com uma data futura confirmada.
   const itensFiltrados = itens
     .filter((item) => {
       if (filtroSelecionado === 'para_assistir') {
@@ -465,8 +482,9 @@ export default function ContinuarAssistindo() {
       }
 
       return (
-        item.aguardandoEstreia ||
-        item.aguardandoNovosEpisodios
+        item.aguardandoEstreia &&
+        item.proximoEpisodioNumero !== null &&
+        Boolean(item.proximoEpisodioData)
       );
     })
     .sort((a, b) => {
@@ -484,8 +502,8 @@ export default function ContinuarAssistindo() {
         return a.nome.localeCompare(b.nome, 'pt-BR');
       }
 
-      // Em breve: datas conhecidas primeiro, da mais próxima para
-      // a mais distante. Séries sem data divulgada ficam no final.
+      // Em breve: todas possuem data confirmada; ordena da estreia
+      // mais próxima para a mais distante.
       if (a.proximoEpisodioData && b.proximoEpisodioData) {
         const dataA = new Date(
           `${a.proximoEpisodioData}T00:00:00`
@@ -506,6 +524,32 @@ export default function ContinuarAssistindo() {
       return a.nome.localeCompare(b.nome, 'pt-BR');
     });
 
+  async function marcarProximoComoAssistido(item: ItemContinuarAssistindo) {
+    if (!item.proximoEpisodio || episodioSendoMarcado !== null) return;
+
+    try {
+      setEpisodioSendoMarcado(item.proximoEpisodio.id);
+      await marcarEpisodiosAssistidos(
+        item.serieId,
+        item.temporadaNumero,
+        [item.proximoEpisodio]
+      );
+
+      // Recarrega imediatamente para o card avançar ao próximo episódio.
+      setTentativaCarregamento((valorAtual) => valorAtual + 1);
+    } catch (erro) {
+      console.log('Erro ao marcar episódio pelo Continuar assistindo:', erro);
+      setMensagemErro('Não foi possível marcar o episódio como assistido.');
+    } finally {
+      setEpisodioSendoMarcado(null);
+    }
+  }
+
+  function atualizarLista() {
+    setAtualizando(true);
+    setTentativaCarregamento((valorAtual) => valorAtual + 1);
+  }
+
   function renderizarItem({ item }: { item: ItemContinuarAssistindo }) {
     const urlCapa = obterUrlCapa(item.posterPath);
     const percentual = item.totalEpisodios
@@ -518,10 +562,9 @@ export default function ContinuarAssistindo() {
         activeOpacity={0.8}
         onPress={() =>
           router.push({
-            pathname: '/temporadas/[id]',
+            pathname: '/serie/[id]',
             params: {
               id: String(item.serieId),
-              temporada: String(item.temporadaNumero),
             },
           })
         }
@@ -607,6 +650,24 @@ export default function ContinuarAssistindo() {
             </Text>
           </View>
         </View>
+
+        {filtroSelecionado === 'para_assistir' && item.proximoEpisodio && (
+          <TouchableOpacity
+            style={styles.botaoMarcarAssistido}
+            activeOpacity={0.75}
+            disabled={episodioSendoMarcado !== null}
+            onPress={(evento) => {
+              evento.stopPropagation();
+              marcarProximoComoAssistido(item);
+            }}
+          >
+            {episodioSendoMarcado === item.proximoEpisodio.id ? (
+              <ActivityIndicator size="small" color="#E91E63" />
+            ) : (
+              <Ionicons name="checkmark" size={24} color="#E91E63" />
+            )}
+          </TouchableOpacity>
+        )}
       </TouchableOpacity>
     );
   }
@@ -672,6 +733,14 @@ export default function ContinuarAssistindo() {
           keyExtractor={(item) => String(item.serieId)}
           renderItem={renderizarItem}
           showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={atualizando}
+              onRefresh={atualizarLista}
+              tintColor="#E91E63"
+              colors={["#E91E63"]}
+            />
+          }
           contentContainerStyle={[
             styles.lista,
             itensFiltrados.length === 0 && styles.listaVazia,
@@ -762,7 +831,7 @@ export default function ContinuarAssistindo() {
               <Text style={styles.textoVazio}>
                 {filtroSelecionado === 'para_assistir'
                   ? 'Não há episódios já lançados esperando para serem assistidos.'
-                  : 'Quando uma série estiver aguardando um novo episódio ou temporada, ela aparecerá aqui.'}
+                  : 'Quando houver um próximo episódio com data de estreia confirmada, ele aparecerá aqui.'}
               </Text>
             </View>
           }

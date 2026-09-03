@@ -40,6 +40,36 @@ import type {
 import { styles } from '../../styles/temporadas.styles';
 
 
+
+function ImagemEpisodioComFallback({
+  uri,
+}: {
+  uri: string | null;
+}) {
+  const [falhou, setFalhou] = useState(false);
+
+  if (!uri || falhou) {
+    return (
+      <View style={styles.imagemAusente}>
+        <Image
+          source={require('../../assets/images/logo-gabiflix.png')}
+          style={styles.logoImagemAusente}
+          resizeMode="contain"
+        />
+      </View>
+    );
+  }
+
+  return (
+    <Image
+      source={{ uri }}
+      style={styles.imagemEpisodio}
+      resizeMode="cover"
+      onError={() => setFalhou(true)}
+    />
+  );
+}
+
 // Página que apresenta as temporadas e seus episódios
 export default function Temporadas() {
   const { id, temporada: temporadaParametro } = useLocalSearchParams<{
@@ -53,6 +83,8 @@ export default function Temporadas() {
   const [serie, setSerie] = useState<DetalhesSerie | null>(null);
   const [temporada, setTemporada] = useState<DetalhesTemporada | null>(null);
   const [numeroSelecionado, setNumeroSelecionado] = useState(1);
+  // Mantém a lista de episódios fechada ao entrar na tela.
+  const [temporadaAberta, setTemporadaAberta] = useState(false);
   const [carregandoSerie, setCarregandoSerie] = useState(true);
   const [carregandoTemporada, setCarregandoTemporada] = useState(false);
   const [mensagemErro, setMensagemErro] = useState('');
@@ -362,7 +394,10 @@ export default function Temporadas() {
                 numeroSelecionado === item.season_number &&
                   styles.botaoTemporadaAtivo,
               ]}
-              onPress={() => setNumeroSelecionado(item.season_number)}
+              onPress={() => {
+                setNumeroSelecionado(item.season_number);
+                setTemporadaAberta(false);
+              }}
             >
               <Text
                 style={[
@@ -418,34 +453,38 @@ export default function Temporadas() {
         </View>
       ) : (
         <ScrollView
+          style={styles.areaConteudoTemporada}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.listaEpisodios}
         >
-          <View style={styles.cabecalhoTemporada}>
-            <Text style={styles.tituloTemporada}>{temporada?.name}</Text>
-            <Text style={styles.progressoTemporada}>
-              {episodiosAssistidos.size} de {temporada?.episodes.length ?? 0}{' '}
-              assistidos
-            </Text>
-          </View>
+          <TouchableOpacity
+            style={styles.cabecalhoTemporada}
+            activeOpacity={0.8}
+            onPress={() => setTemporadaAberta((aberta) => !aberta)}
+          >
+            <View style={styles.infoTemporada}>
+              <Text style={styles.tituloTemporada}>{temporada?.name}</Text>
+              <Text style={styles.progressoTemporada}>
+                {episodiosAssistidos.size} de {temporada?.episodes.length ?? 0}{' '}
+                assistidos
+              </Text>
+            </View>
 
-          {temporada?.episodes.map((episodio) => {
+            <Ionicons
+              name={temporadaAberta ? 'chevron-up' : 'chevron-down'}
+              size={22}
+              color="#BDBDBD"
+            />
+          </TouchableOpacity>
+
+          {temporadaAberta &&
+            temporada?.episodes.map((episodio) => {
             const urlImagem = obterUrlEpisodio(episodio.still_path);
             const episodioDisponivel = episodioFoiLancado(episodio.air_date);
 
             return (
               <View key={episodio.id} style={styles.cardEpisodio}>
-                {urlImagem ? (
-                  <Image
-                    source={{ uri: urlImagem }}
-                    style={styles.imagemEpisodio}
-                    resizeMode="cover"
-                  />
-                ) : (
-                  <View style={styles.imagemAusente}>
-                    <Ionicons name="image-outline" size={25} color="#777777" />
-                  </View>
-                )}
+                <ImagemEpisodioComFallback uri={urlImagem} />
 
                 <View style={styles.dadosEpisodio}>
                   <View style={styles.linhaSuperiorEpisodio}>
@@ -468,9 +507,17 @@ export default function Temporadas() {
                       >
                         {episodioSendoAlterado === episodio.id ? (
                           <ActivityIndicator size="small" color="#FFFFFF" />
-                        ) : episodiosAssistidos.has(episodio.id) ? (
-                          <Ionicons name="checkmark" size={16} color="#FFFFFF" />
-                        ) : null}
+                        ) : (
+                          <Ionicons
+                            name="checkmark"
+                            size={15}
+                            color={
+                              episodiosAssistidos.has(episodio.id)
+                                ? '#FFFFFF'
+                                : '#E91E63'
+                            }
+                          />
+                        )}
                       </TouchableOpacity>
                     )}
                   </View>

@@ -517,6 +517,24 @@ export const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
+
+  // Mesmo padrão visual usado na página Temporadas:
+  // círculo vazio com ✓ rosa e preenchimento rosa quando assistido.
+  botaoAssistidoDetalhes: {
+    width: 27,
+    height: 27,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#E91E63',
+    backgroundColor: 'transparent',
+  },
+
+  botaoAssistidoDetalhesAtivo: {
+    backgroundColor: '#E91E63',
+  },
+
   listaTemporadasAcordeao: {
     gap: 10,
   },
@@ -569,15 +587,15 @@ export const styles = StyleSheet.create({
   },
 
   botaoMarcarTemporada: {
-    width: 44,
-    height: 44,
+    width: 27,
+    height: 27,
     marginLeft: 8,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 22,
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: '#3A3A3A',
-    backgroundColor: '#202020',
+    borderColor: '#E91E63',
+    backgroundColor: 'transparent',
   },
 
   botaoMarcarTemporadaAtivo: {

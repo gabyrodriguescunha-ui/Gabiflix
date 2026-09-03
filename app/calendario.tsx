@@ -37,6 +37,32 @@ import { styles } from '../styles/calendario.styles';
 
 
 
+
+function ImagemCalendarioComFallback({ uri }: { uri: string | null }) {
+  const [falhou, setFalhou] = useState(false);
+
+  if (!uri || falhou) {
+    return (
+      <View style={styles.semImagem}>
+        <Image
+          source={require('../assets/images/logo-gabiflix.png')}
+          style={styles.logoSemImagem}
+          resizeMode="contain"
+        />
+      </View>
+    );
+  }
+
+  return (
+    <Image
+      source={{ uri }}
+      style={styles.imagem}
+      resizeMode="cover"
+      onError={() => setFalhou(true)}
+    />
+  );
+}
+
 // Junta os dados salvos da série com o próximo episódio recebido do TMDB
 interface ItemCalendario {
   serie: ItemMinhaLista;
@@ -493,21 +519,7 @@ export default function Calendario() {
                       })
                     }
                   >
-                    {imagem ? (
-                      <Image
-                        source={{ uri: imagem }}
-                        style={styles.imagem}
-                        resizeMode="cover"
-                      />
-                    ) : (
-                      <View style={styles.semImagem}>
-                        <Ionicons
-                          name="tv-outline"
-                          size={27}
-                          color="#777777"
-                        />
-                      </View>
-                    )}
+                    <ImagemCalendarioComFallback uri={imagem} />
 
                     <View style={styles.dadosCard}>
                       <Text style={styles.nomeSerie} numberOfLines={1}>

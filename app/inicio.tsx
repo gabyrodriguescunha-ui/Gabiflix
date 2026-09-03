@@ -1,13 +1,14 @@
 // ESTRUTURA E FUNCIONAMENTO DA PÁGINA PRINCIPAL
 
 // Hooks utilizados para verificar a sessão, preparar o destaque e controlar o menu
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 // Componentes utilizados na tela
 import {
   ActivityIndicator,
   Dimensions,
   Image,
   ImageBackground,
+  RefreshControl,
   ScrollView,
   Text,
   TouchableOpacity,
@@ -20,14 +21,16 @@ import { Ionicons } from '@expo/vector-icons';
 // Cria o degradê aplicado sobre a imagem da série em destaque
 import { LinearGradient } from 'expo-linear-gradient';
 // Recurso de navegação
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 // Evita que o conteúdo fique atrás das barras do celular
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 // Cliente responsável pela autenticação
 import { supabase } from '../lib/supabase';
 // Serviço responsável por buscar as séries e imagens no TMDB
 import {
   buscarHistoricoAssistido,
+  marcarEpisodiosAssistidos,
   type RegistroEpisodioAssistido,
 } from '../services/episodios-assistidos.service';
 import { buscarMinhaLista } from '../services/minha-lista.service';
@@ -39,7 +42,7 @@ import {
   obterUrlFundo,
 } from '../services/tmdb.service';
 // Tipo utilizado para representar uma série
-import type { Serie } from '../types/serie';
+import type { Episodio, Serie } from '../types/serie';
 // Modal personalizado para avisos e confirmações
 import { ModalConfirmacao } from '../components/modal-confirmacao/ModalConfirmacao';
 // Estilos da página
@@ -55,8 +58,17 @@ interface ItemContinuarHome {
   posterPath: string | null;
   temporadaNumero: number;
   proximoEpisodioNumero: number;
+  proximoEpisodio: Episodio;
   quantidadeAssistida: number;
   totalEpisodios: number;
+}
+
+
+const PREFIXO_CACHE_CONTINUAR = 'gabiflix:continuar-home:v3';
+const LIMITE_CONTINUAR_HOME = 5;
+
+function chaveCacheContinuar(usuarioId: string) {
+  return `${PREFIXO_CACHE_CONTINUAR}:${usuarioId}`;
 }
 
 function episodioFoiLancado(data: string | null): boolean {
@@ -94,6 +106,7 @@ export default function Inicio() {
   const [nomeUsuario, setNomeUsuario] = useState('Usuária');
   // Informa que a conta possui uma sessão válida
   const [sessaoValida, setSessaoValida] = useState(false);
+  const [usuarioId, setUsuarioId] = useState('');
   // Guarda as séries que estão em tendência durante a semana
   const [seriesEmAlta, setSeriesEmAlta] = useState<Serie[]>([]);
 
@@ -105,6 +118,12 @@ export default function Inicio() {
   const [erroSeries, setErroSeries] = useState('');
   // Incrementado pelo botão Tentar novamente para repetir a consulta ao TMDB
   const [tentativaSeries, setTentativaSeries] = useState(0);
+  const [atualizacaoContinuar, setAtualizacaoContinuar] = useState(0);
+  const [atualizandoHome, setAtualizandoHome] = useState(false);
+  const [carregandoContinuar, setCarregandoContinuar] = useState(true);
+  const [serieMarcandoEpisodio, setSerieMarcandoEpisodio] =
+    useState<number | null>(null);
+  const [toastAssistidoVisivel, setToastAssistidoVisivel] = useState(false);
 
   // Verifica a sessão e recupera os dados da conta conectada
   useEffect(() => {
@@ -124,6 +143,7 @@ export default function Inicio() {
         }
 
         setSessaoValida(true);
+        setUsuarioId(data.session.user.id);
 
         // Prioriza o nome informado no cadastro
         const nomeCadastrado = data.session.user.user_metadata?.nome;
@@ -186,93 +206,166 @@ export default function Inicio() {
     };
   }, [sessaoValida, tentativaSeries]);
 
-  // Prepara os cards pessoais de Continuar assistindo.
+  // Mostra imediatamente o último Continuar assistindo salvo no aparelho.
   useEffect(() => {
-    if (!sessaoValida) return;
+    if (!usuarioId) return;
+
+    let telaAtiva = true;
+
+    async function carregarCacheContinuar() {
+      try {
+        const salvo = await AsyncStorage.getItem(chaveCacheContinuar(usuarioId));
+
+        if (!telaAtiva || !salvo) return;
+
+        const itensSalvos = JSON.parse(salvo) as ItemContinuarHome[];
+
+        if (Array.isArray(itensSalvos)) {
+          setContinuarHome(itensSalvos.slice(0, LIMITE_CONTINUAR_HOME));
+        }
+      } catch (erro) {
+        console.log('Erro ao recuperar cache do Continuar assistindo:', erro);
+      }
+    }
+
+    carregarCacheContinuar();
+
+    return () => {
+      telaAtiva = false;
+    };
+  }, [usuarioId]);
+
+  // Prepara os cards pessoais de Continuar assistindo.
+  // A Home calcula apenas os primeiros cards; a tela "Ver tudo" continua completa.
+  useEffect(() => {
+    if (!sessaoValida || !usuarioId) return;
 
     let telaAtiva = true;
 
     async function carregarContinuarAssistindo() {
       try {
+        setCarregandoContinuar(true);
+
         const [historico, minhaLista] = await Promise.all([
           buscarHistoricoAssistido(),
           buscarMinhaLista(),
         ]);
 
+        const seriesAcompanhadas = minhaLista
+          .filter(
+            (item) =>
+              item.status_usuario === 'assistindo' ||
+              item.status_usuario === 'reassistindo'
+          )
+          .slice(0, LIMITE_CONTINUAR_HOME);
+
         const idsAcompanhadas = new Set(
-          minhaLista
-            .filter(
-              (item) =>
-                item.status_usuario === 'assistindo' ||
-                item.status_usuario === 'reassistindo'
-            )
-            .map((item) => item.serie_id)
+          seriesAcompanhadas.map((item) => item.serie_id)
         );
 
         const registrosPorSerie = new Map<number, RegistroEpisodioAssistido[]>();
 
+        // Série recém-adicionada aparece mesmo que ainda tenha 0 episódios assistidos.
+        idsAcompanhadas.forEach((serieId) => {
+          registrosPorSerie.set(serieId, []);
+        });
+
         historico.forEach((registro) => {
           if (!idsAcompanhadas.has(registro.serie_id)) return;
+
           const atuais = registrosPorSerie.get(registro.serie_id) ?? [];
           atuais.push(registro);
           registrosPorSerie.set(registro.serie_id, atuais);
         });
 
         const resultados = await Promise.all(
-          Array.from(registrosPorSerie.entries()).map(async ([serieId, registros]) => {
-            try {
-              const detalhes = await buscarDetalhesSerie(serieId);
-              const idsAssistidos = new Set(registros.map((registro) => registro.episodio_id));
-
-              const temporadas = detalhes.seasons
-                .filter((temporada) => temporada.season_number > 0 && temporada.episode_count > 0)
-                .sort((a, b) => a.season_number - b.season_number);
-
-              for (const temporada of temporadas) {
-                const detalhesTemporada = await buscarDetalhesTemporada(
-                  serieId,
-                  temporada.season_number
+          Array.from(registrosPorSerie.entries()).map(
+            async ([serieId, registros]): Promise<ItemContinuarHome | null> => {
+              try {
+                const detalhes = await buscarDetalhesSerie(serieId);
+                const idsAssistidos = new Set(
+                  registros.map((registro) => registro.episodio_id)
                 );
 
-                const proximo = detalhesTemporada.episodes.find(
-                  (episodio) =>
-                    !idsAssistidos.has(episodio.id) &&
-                    episodioFoiLancado(episodio.air_date)
+                const temporadas = detalhes.seasons
+                  .filter(
+                    (temporada) =>
+                      temporada.season_number > 0 &&
+                      temporada.episode_count > 0
+                  )
+                  .sort((a, b) => a.season_number - b.season_number);
+
+                // As temporadas são solicitadas juntas. O cache do tmdb.service
+                // reaproveita as respostas nas próximas visitas.
+                const detalhesTemporadas = await Promise.all(
+                  temporadas.map(async (temporada) => ({
+                    numero: temporada.season_number,
+                    dados: await buscarDetalhesTemporada(
+                      serieId,
+                      temporada.season_number
+                    ),
+                  }))
                 );
 
-                if (proximo) {
+                for (const temporada of detalhesTemporadas) {
+                  const proximo = temporada.dados.episodes.find(
+                    (episodio) =>
+                      !idsAssistidos.has(episodio.id) &&
+                      episodioFoiLancado(episodio.air_date)
+                  );
+
+                  if (!proximo) continue;
+
                   const assistidosNaTemporada = registros.filter(
-                    (registro) => registro.temporada_numero === temporada.season_number
+                    (registro) =>
+                      registro.temporada_numero === temporada.numero
                   ).length;
 
                   return {
                     serieId,
                     nome: detalhes.name,
                     posterPath: detalhes.poster_path,
-                    temporadaNumero: temporada.season_number,
+                    temporadaNumero: temporada.numero,
                     proximoEpisodioNumero: proximo.episode_number,
+                    proximoEpisodio: proximo,
                     quantidadeAssistida: assistidosNaTemporada,
-                    totalEpisodios: detalhesTemporada.episodes.length,
-                  } satisfies ItemContinuarHome;
+                    totalEpisodios: temporada.dados.episodes.length,
+                  };
                 }
-              }
 
-              return null;
-            } catch (erro) {
-              console.log(`Erro ao preparar série ${serieId} na Home:`, erro);
-              return null;
+                return null;
+              } catch (erro) {
+                console.log(
+                  `Erro ao preparar série ${serieId} na Home:`,
+                  erro
+                );
+                return null;
+              }
             }
-          })
+          )
         );
 
-        if (telaAtiva) {
-          setContinuarHome(
-            resultados.filter((item): item is ItemContinuarHome => item !== null).slice(0, 8)
-          );
-        }
+        if (!telaAtiva) return;
+
+        const itensValidos = resultados.filter(
+          (item): item is ItemContinuarHome => item !== null
+        );
+
+        setContinuarHome(itensValidos);
+
+        // Salva o resultado para a próxima abertura da Home ser instantânea.
+        await AsyncStorage.setItem(
+          chaveCacheContinuar(usuarioId),
+          JSON.stringify(itensValidos)
+        );
       } catch (erro) {
         console.log('Erro ao carregar Continuar assistindo na Home:', erro);
-        if (telaAtiva) setContinuarHome([]);
+        // Não apaga o que já estava na tela: em caso de falha, mantemos o cache.
+      } finally {
+        if (telaAtiva) {
+          setCarregandoContinuar(false);
+          setAtualizandoHome(false);
+        }
       }
     }
 
@@ -281,7 +374,61 @@ export default function Inicio() {
     return () => {
       telaAtiva = false;
     };
-  }, [sessaoValida]);
+  }, [sessaoValida, usuarioId, atualizacaoContinuar]);
+
+  // Atualiza o Continuar assistindo sempre que a Home volta ao foco.
+  useFocusEffect(
+    useCallback(() => {
+      if (sessaoValida) {
+        setAtualizacaoContinuar((valorAtual) => valorAtual + 1);
+      }
+    }, [sessaoValida])
+  );
+
+  function atualizarHome() {
+    setAtualizandoHome(true);
+    setTentativaSeries((valorAtual) => valorAtual + 1);
+    setAtualizacaoContinuar((valorAtual) => valorAtual + 1);
+  }
+
+
+  // Exibe um aviso leve no estilo snackbar e fecha sozinho.
+  function mostrarToastAssistido() {
+    setToastAssistidoVisivel(true);
+
+    setTimeout(() => {
+      setToastAssistidoVisivel(false);
+    }, 2000);
+  }
+
+  // Marca diretamente o episódio exibido no card e recalcula o próximo.
+  async function marcarEpisodioDaHome(item: ItemContinuarHome) {
+    if (serieMarcandoEpisodio !== null) return;
+
+    try {
+      setSerieMarcandoEpisodio(item.serieId);
+
+      await marcarEpisodiosAssistidos(
+        item.serieId,
+        item.temporadaNumero,
+        [item.proximoEpisodio]
+      );
+
+      mostrarToastAssistido();
+
+      // Recalcula o card usando o histórico atualizado. O TMDB já fica em cache,
+      // então normalmente só o progresso precisa mudar.
+      setAtualizacaoContinuar((valorAtual) => valorAtual + 1);
+    } catch (erro) {
+      console.log('Erro ao marcar episódio pela Home:', erro);
+      mostrarAviso(
+        'Não foi possível marcar o episódio',
+        'Verifique sua conexão e tente novamente.'
+      );
+    } finally {
+      setSerieMarcandoEpisodio(null);
+    }
+  }
 
   // Mantém poucos destaques para o carrossel ficar leve e objetivo.
   const destaquesEmAlta = useMemo(
@@ -411,6 +558,14 @@ export default function Inicio() {
         ) : (
           <ScrollView
             showsVerticalScrollIndicator={false}
+            refreshControl={
+              <RefreshControl
+                refreshing={atualizandoHome}
+                onRefresh={atualizarHome}
+                tintColor="#E91E63"
+                colors={["#E91E63"]}
+              />
+            }
             contentContainerStyle={styles.scrollConteudo}
           >
             {/* Apresenta uma saudação antes das seções principais */}
@@ -458,7 +613,7 @@ export default function Inicio() {
                       activeOpacity={0.85}
                       onPress={() =>
                         router.push({
-                          pathname: '/temporadas/[id]',
+                          pathname: '/serie/[id]',
                           params: {
                             id: String(item.serieId),
                             temporada: String(item.temporadaNumero),
@@ -478,9 +633,36 @@ export default function Inicio() {
                         {item.nome}
                       </Text>
 
-                      <Text style={styles.episodioContinuar}>
-                        T{item.temporadaNumero} • E{item.proximoEpisodioNumero}
-                      </Text>
+                      <View style={styles.linhaEpisodioContinuar}>
+                        <Text style={styles.episodioContinuar}>
+                          T{item.temporadaNumero} • E{item.proximoEpisodioNumero}
+                        </Text>
+
+                        <TouchableOpacity
+                          style={[
+                            styles.botaoAssistidoHome,
+                            serieMarcandoEpisodio === item.serieId &&
+                              styles.botaoAssistidoHomeAtivo,
+                          ]}
+                          activeOpacity={0.75}
+                          disabled={serieMarcandoEpisodio !== null}
+                          onPress={(evento) => {
+                            evento.stopPropagation();
+                            marcarEpisodioDaHome(item);
+                          }}
+                          accessibilityLabel={`Marcar T${item.temporadaNumero} E${item.proximoEpisodioNumero} como assistido`}
+                        >
+                          {serieMarcandoEpisodio === item.serieId ? (
+                            <ActivityIndicator size="small" color="#FFFFFF" />
+                          ) : (
+                            <Ionicons
+                              name="checkmark"
+                              size={15}
+                              color="#E91E63"
+                            />
+                          )}
+                        </TouchableOpacity>
+                      </View>
 
                       <View style={styles.trilhoContinuar}>
                         <View
@@ -494,13 +676,24 @@ export default function Inicio() {
                   );
                 })}
               </ScrollView>
+            ) : carregandoContinuar ? (
+              <View style={styles.continuarVazio}>
+                <ActivityIndicator size="small" color="#E91E63" />
+                <Text style={styles.textoContinuarVazio}>
+                  Preparando suas séries...
+                </Text>
+              </View>
             ) : (
               <TouchableOpacity
                 style={styles.continuarVazio}
                 activeOpacity={0.8}
                 onPress={() => router.push('/continuar-assistindo')}
               >
-                <Ionicons name="checkmark-circle-outline" size={22} color="#E91E63" />
+                <Ionicons
+                  name="checkmark-circle-outline"
+                  size={22}
+                  color="#E91E63"
+                />
                 <Text style={styles.textoContinuarVazio}>
                   Você está em dia com suas séries.
                 </Text>
@@ -745,6 +938,22 @@ export default function Inicio() {
 
         )}
       </View>
+
+      {toastAssistidoVisivel && (
+        <View pointerEvents="none" style={styles.toastAssistido}>
+          <View style={styles.toastIcone}>
+            <Ionicons
+              name="checkmark"
+              size={15}
+              color="#FFFFFF"
+            />
+          </View>
+
+          <Text style={styles.toastTexto}>
+            Marcado como assistido
+          </Text>
+        </View>
+      )}
 
       {/* Menu exibido sobre a página quando o botão for tocado */}
       <MenuLateral
