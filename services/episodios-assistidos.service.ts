@@ -17,6 +17,55 @@ export interface RegistroEpisodioAssistido {
   assistido_em: string;
 }
 
+// Normaliza os campos numéricos vindos do Supabase.
+// Isso evita falhas de comparação caso algum valor seja retornado como string.
+function normalizarRegistroEpisodio(
+  registro: RegistroEpisodioAssistido
+): RegistroEpisodioAssistido {
+  return {
+    ...registro,
+    id: Number(registro.id),
+    serie_id: Number(registro.serie_id),
+    temporada_numero: Number(registro.temporada_numero),
+    episodio_id: Number(registro.episodio_id),
+    episodio_numero: Number(registro.episodio_numero),
+  };
+}
+
+// Confere um episódio por duas chaves:
+// 1) ID real do TMDB;
+// 2) série + temporada + número do episódio.
+// A segunda chave protege históricos importados caso o ID tenha mudado
+// ou tenha sido salvo por uma correspondência antiga.
+export function registroCorrespondeEpisodio(
+  registro: RegistroEpisodioAssistido,
+  idSerie: number,
+  numeroTemporada: number,
+  idEpisodio: number,
+  numeroEpisodio: number
+): boolean {
+  const mesmaSerie =
+    Number(registro.serie_id) === Number(idSerie);
+
+  if (!mesmaSerie) {
+    return false;
+  }
+
+  if (
+    Number(registro.episodio_id) ===
+    Number(idEpisodio)
+  ) {
+    return true;
+  }
+
+  return (
+    Number(registro.temporada_numero) ===
+      Number(numeroTemporada) &&
+    Number(registro.episodio_numero) ===
+      Number(numeroEpisodio)
+  );
+}
+
 
 // Cache curto do histórico por usuário. É invalidado imediatamente sempre
 // que um episódio é marcado ou desmarcado.
@@ -64,7 +113,9 @@ export async function buscarEpisodiosAssistidos(
     throw error;
   }
 
-  return (data ?? []).map((registro) => registro.episodio_id);
+  return (data ?? []).map(
+    (registro) => Number(registro.episodio_id)
+  );
 }
 
 // Busca os IDs de todos os episódios assistidos de uma série,
@@ -85,7 +136,7 @@ export async function buscarTodosEpisodiosAssistidosDaSerie(
   }
 
   return (data ?? []).map(
-    (registro) => registro.episodio_id
+    (registro) => Number(registro.episodio_id)
   );
 }
 
@@ -101,19 +152,40 @@ export async function buscarHistoricoAssistido(): Promise<
     return salvo.dados;
   }
 
-  const { data, error } = await supabase
-    .from('episodios_assistidos')
-    .select(
-      'id, serie_id, temporada_numero, episodio_id, episodio_numero, episodio_nome, imagem_path, assistido_em'
-    )
-    .eq('user_id', usuario.id)
-    .order('assistido_em', { ascending: false });
+  // O Supabase limita a quantidade de linhas retornadas por consulta.
+  // Como uma importação pode possuir milhares de episódios, buscamos o
+  // histórico em páginas para não perder registros antigos.
+  const TAMANHO_PAGINA = 1000;
+  const todosRegistros: RegistroEpisodioAssistido[] = [];
 
-  if (error) {
-    throw error;
+  for (let inicio = 0; ; inicio += TAMANHO_PAGINA) {
+    const fim = inicio + TAMANHO_PAGINA - 1;
+
+    const { data, error } = await supabase
+      .from('episodios_assistidos')
+      .select(
+        'id, serie_id, temporada_numero, episodio_id, episodio_numero, episodio_nome, imagem_path, assistido_em'
+      )
+      .eq('user_id', usuario.id)
+      .order('assistido_em', { ascending: false })
+      .range(inicio, fim);
+
+    if (error) {
+      throw error;
+    }
+
+    const pagina =
+      ((data ?? []) as RegistroEpisodioAssistido[])
+        .map(normalizarRegistroEpisodio);
+
+    todosRegistros.push(...pagina);
+
+    if (pagina.length < TAMANHO_PAGINA) {
+      break;
+    }
   }
 
-  const resultado = (data ?? []) as RegistroEpisodioAssistido[];
+  const resultado = todosRegistros;
 
   cacheHistorico.set(usuario.id, {
     dados: resultado,

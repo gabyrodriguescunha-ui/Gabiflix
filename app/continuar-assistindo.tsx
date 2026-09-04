@@ -17,6 +17,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   buscarHistoricoAssistido,
   marcarEpisodiosAssistidos,
+  registroCorrespondeEpisodio,
   type RegistroEpisodioAssistido,
 } from '../services/episodios-assistidos.service';
 import {
@@ -141,7 +142,7 @@ export default function ContinuarAssistindo() {
                   item.status_usuario === 'assistindo' ||
                   item.status_usuario === 'reassistindo'
               )
-              .map((item) => item.serie_id)
+              .map((item) => Number(item.serie_id))
           );
 
           const registrosPorSerie = new Map<
@@ -155,16 +156,19 @@ export default function ContinuarAssistindo() {
           });
 
           historico.forEach((registro) => {
-            if (!idsSeriesAcompanhadas.has(registro.serie_id)) {
+            const serieIdRegistro =
+              Number(registro.serie_id);
+
+            if (!idsSeriesAcompanhadas.has(serieIdRegistro)) {
               return;
             }
 
             const registrosAtuais =
-              registrosPorSerie.get(registro.serie_id) ?? [];
+              registrosPorSerie.get(serieIdRegistro) ?? [];
 
             registrosAtuais.push(registro);
             registrosPorSerie.set(
-              registro.serie_id,
+              serieIdRegistro,
               registrosAtuais
             );
           });
@@ -178,11 +182,22 @@ export default function ContinuarAssistindo() {
                   const detalhes =
                     await buscarDetalhesSerie(serieId);
 
-                  const idsAssistidos = new Set(
-                    registros.map(
-                      (registro) => registro.episodio_id
-                    )
-                  );
+                  // O histórico é conferido tanto pelo ID do episódio quanto
+                  // por temporada + número. Isso mantém compatibilidade com
+                  // episódios importados e com episódios marcados no próprio app.
+                  const foiAssistido = (
+                    numeroTemporada: number,
+                    episodio: Episodio
+                  ) =>
+                    registros.some((registro) =>
+                      registroCorrespondeEpisodio(
+                        registro,
+                        serieId,
+                        numeroTemporada,
+                        episodio.id,
+                        episodio.episode_number
+                      )
+                    );
 
                   const temporadasRegulares =
                     detalhes.seasons
@@ -196,6 +211,90 @@ export default function ContinuarAssistindo() {
                           a.season_number -
                           b.season_number
                       );
+
+                  const temporadasDetalhadas =
+                    await Promise.all(
+                      temporadasRegulares.map(
+                        async (resumoTemporada) => ({
+                          numero:
+                            resumoTemporada.season_number,
+                          dados:
+                            await buscarDetalhesTemporada(
+                              serieId,
+                              resumoTemporada.season_number
+                            ),
+                        })
+                      )
+                    );
+
+                  const episodiosOrdenados =
+                    temporadasDetalhadas.flatMap(
+                      (temporadaDetalhada) =>
+                        temporadaDetalhada.dados.episodes
+                          .slice()
+                          .sort(
+                            (a, b) =>
+                              a.episode_number -
+                              b.episode_number
+                          )
+                          .map((episodio) => ({
+                            temporadaNumero:
+                              temporadaDetalhada.numero,
+                            episodio,
+                          }))
+                    );
+
+                  // O ponto de continuidade é o episódio assistido mais avançado.
+                  // Assim uma falha antiga em T1 não faz uma série longa voltar
+                  // para o começo quando o usuário já está em temporadas atuais.
+                  let indiceUltimoAssistido = -1;
+
+                  episodiosOrdenados.forEach(
+                    (item, indice) => {
+                      if (
+                        foiAssistido(
+                          item.temporadaNumero,
+                          item.episodio
+                        )
+                      ) {
+                        indiceUltimoAssistido = indice;
+                      }
+                    }
+                  );
+
+                  const candidatos =
+                    indiceUltimoAssistido >= 0
+                      ? episodiosOrdenados.slice(
+                          indiceUltimoAssistido + 1
+                        )
+                      : episodiosOrdenados;
+
+                  const proximoLancado =
+                    candidatos.find(
+                      (item) =>
+                        !foiAssistido(
+                          item.temporadaNumero,
+                          item.episodio
+                        ) &&
+                        episodioFoiLancado(
+                          item.episodio.air_date
+                        )
+                    );
+
+                  const proximoFuturo =
+                    candidatos.find(
+                      (item) =>
+                        !foiAssistido(
+                          item.temporadaNumero,
+                          item.episodio
+                        ) &&
+                        Boolean(
+                          item.episodio.air_date
+                        ) &&
+                        !episodioFoiLancado(
+                          item.episodio.air_date
+                        )
+                    );
 
                   let temporadaDestino =
                     temporadasRegulares[0]
@@ -218,160 +317,104 @@ export default function ContinuarAssistindo() {
                   let quantidadeAssistida = 0;
                   let episodiosPendentesLancados = 0;
 
-                  // Caso não exista nenhum episódio lançado pendente,
-                  // guardamos o primeiro episódio futuro encontrado.
-                  let primeiroFuturo:
-                    | {
-                        temporadaNumero: number;
-                        episodioNumero: number;
-                        episodioNome: string;
-                        episodioData: string | null;
-                        totalEpisodios: number;
-                        quantidadeAssistida: number;
-                      }
-                    | null = null;
-
-                  // Guarda a última temporada real para séries em dia que
-                  // ainda estão ativas, mas sem próximo episódio cadastrado.
-                  let ultimaTemporadaReal:
-                    | {
-                        numero: number;
-                        totalEpisodios: number;
-                        quantidadeAssistida: number;
-                      }
-                    | null = null;
-
-                  let encontrouLancadoPendente = false;
-
-                  for (
-                    const resumoTemporada
-                    of temporadasRegulares
-                  ) {
-                    const detalhesTemporada =
-                      await buscarDetalhesTemporada(
-                        serieId,
-                        resumoTemporada.season_number
+                  const aplicarProgressoTemporada = (
+                    numeroTemporada: number
+                  ) => {
+                    const temporadaSelecionada =
+                      temporadasDetalhadas.find(
+                        (item) =>
+                          item.numero ===
+                          numeroTemporada
                       );
 
-                    if (
-                      detalhesTemporada.episodes.length === 0
-                    ) {
-                      continue;
+                    if (!temporadaSelecionada) {
+                      return;
                     }
 
-                    const assistidosNaTemporada =
-                      registros.filter(
-                        (registro) =>
-                          registro.temporada_numero ===
-                          resumoTemporada.season_number
-                      ).length;
-
-                    ultimaTemporadaReal = {
-                      numero:
-                        resumoTemporada.season_number,
-                      totalEpisodios:
-                        detalhesTemporada.episodes.length,
-                      quantidadeAssistida:
-                        assistidosNaTemporada,
-                    };
-
-                    const pendentesLancados =
-                      detalhesTemporada.episodes.filter(
+                    const lancados =
+                      temporadaSelecionada.dados.episodes.filter(
                         (episodio) =>
-                          !idsAssistidos.has(episodio.id) &&
                           episodioFoiLancado(
                             episodio.air_date
                           )
                       );
 
-                    // Sempre prioriza o episódio lançado mais antigo ainda não
-                    // visto, inclusive quando houve algum episódio pulado.
-                    if (pendentesLancados.length > 0) {
-                      const proximo =
-                        pendentesLancados[0];
+                    quantidadeAssistida =
+                      lancados.filter((episodio) =>
+                        foiAssistido(
+                          numeroTemporada,
+                          episodio
+                        )
+                      ).length;
 
-                      temporadaDestino =
-                        resumoTemporada.season_number;
-                      proximoEpisodioNumero =
-                        proximo.episode_number;
-                      proximoEpisodio = proximo;
-                      proximoEpisodioNome =
-                        proximo.name;
-                      proximoEpisodioData =
-                        proximo.air_date;
-                      aguardandoEstreia = false;
-                      totalEpisodios =
-                        detalhesTemporada.episodes.length;
-                      quantidadeAssistida =
-                        assistidosNaTemporada;
-                      episodiosPendentesLancados =
-                        pendentesLancados.length;
-                      encontrouLancadoPendente = true;
-                      break;
-                    }
+                    totalEpisodios =
+                      lancados.length;
 
-                    if (!primeiroFuturo) {
-                      const futuro =
-                        detalhesTemporada.episodes.find(
-                          (episodio) =>
-                            !idsAssistidos.has(
-                              episodio.id
-                            ) &&
-                            !episodioFoiLancado(
-                              episodio.air_date
-                            )
-                        );
+                    episodiosPendentesLancados =
+                      lancados.filter(
+                        (episodio) =>
+                          !foiAssistido(
+                            numeroTemporada,
+                            episodio
+                          )
+                      ).length;
+                  };
 
-                      if (futuro) {
-                        primeiroFuturo = {
-                          temporadaNumero:
-                            resumoTemporada.season_number,
-                          episodioNumero:
-                            futuro.episode_number,
-                          episodioNome:
-                            futuro.name,
-                          episodioData:
-                            futuro.air_date,
-                          totalEpisodios:
-                            detalhesTemporada.episodes.length,
-                          quantidadeAssistida:
-                            assistidosNaTemporada,
-                        };
-                      }
-                    }
-                  }
-
-                  if (
-                    !encontrouLancadoPendente &&
-                    primeiroFuturo
-                  ) {
+                  if (proximoLancado) {
                     temporadaDestino =
-                      primeiroFuturo.temporadaNumero;
+                      proximoLancado.temporadaNumero;
                     proximoEpisodioNumero =
-                      primeiroFuturo.episodioNumero;
+                      proximoLancado.episodio.episode_number;
+                    proximoEpisodio =
+                      proximoLancado.episodio;
+                    proximoEpisodioNome =
+                      proximoLancado.episodio.name;
+                    proximoEpisodioData =
+                      proximoLancado.episodio.air_date;
+                    aguardandoEstreia = false;
+
+                    aplicarProgressoTemporada(
+                      temporadaDestino
+                    );
+                  } else if (proximoFuturo) {
+                    temporadaDestino =
+                      proximoFuturo.temporadaNumero;
+                    proximoEpisodioNumero =
+                      proximoFuturo.episodio.episode_number;
                     // Episódios futuros não podem ser marcados como assistidos.
                     proximoEpisodio = null;
                     proximoEpisodioNome =
-                      primeiroFuturo.episodioNome;
+                      proximoFuturo.episodio.name;
                     proximoEpisodioData =
-                      primeiroFuturo.episodioData;
+                      proximoFuturo.episodio.air_date;
                     aguardandoEstreia = true;
-                    totalEpisodios =
-                      primeiroFuturo.totalEpisodios;
-                    quantidadeAssistida =
-                      primeiroFuturo.quantidadeAssistida;
-                  }
 
-                  if (
-                    proximoEpisodioNumero === null &&
-                    ultimaTemporadaReal
-                  ) {
-                    temporadaDestino =
-                      ultimaTemporadaReal.numero;
-                    totalEpisodios =
-                      ultimaTemporadaReal.totalEpisodios;
-                    quantidadeAssistida =
-                      ultimaTemporadaReal.quantidadeAssistida;
+                    aplicarProgressoTemporada(
+                      temporadaDestino
+                    );
+                  } else {
+                    // Se não existe próximo episódio cadastrado, mantém o
+                    // progresso da temporada mais recente com episódios lançados.
+                    const ultimaComLancados =
+                      [...temporadasDetalhadas]
+                        .reverse()
+                        .find((item) =>
+                          item.dados.episodes.some(
+                            (episodio) =>
+                              episodioFoiLancado(
+                                episodio.air_date
+                              )
+                          )
+                        );
+
+                    if (ultimaComLancados) {
+                      temporadaDestino =
+                        ultimaComLancados.numero;
+
+                      aplicarProgressoTemporada(
+                        temporadaDestino
+                      );
+                    }
                   }
 
                   const serieEncerrada =

@@ -62,8 +62,23 @@ export interface SerieEncontradaPorIdExterno {
 }
 
 // Estrutura retornada pelo TMDB ao pesquisar um identificador externo
+// Estrutura mínima de um episódio localizado por ID externo.
+// O /find do TMDB devolve também show_id, season_number e episode_number,
+// permitindo corrigir diferenças de numeração entre TV Time/TVDB e TMDB.
+export interface EpisodioEncontradoPorIdExterno {
+  id: number;
+  name: string;
+  air_date: string | null;
+  episode_number: number;
+  season_number: number;
+  show_id: number;
+  still_path: string | null;
+}
+
+// Estrutura retornada pelo TMDB ao pesquisar um identificador externo
 interface RespostaBuscaIdExterno {
   tv_results: SerieEncontradaPorIdExterno[];
+  tv_episode_results: EpisodioEncontradoPorIdExterno[];
 }
 
 // Endereço principal utilizado pelas requisições da API
@@ -557,6 +572,38 @@ export async function buscarSeriePorTvdbId(
   );
 
   return dados.tv_results?.[0] ?? null;
+}
+
+
+// Localiza um episódio do TMDB pelo TVDB ID fornecido pelo TV Time.
+// O endpoint /find aceita TheTVDB também para episódios e devolve a
+// temporada/número usados pelo próprio TMDB.
+export async function buscarEpisodioPorTvdbId(
+  tvdbId: number,
+  idSerieEsperada?: number
+): Promise<EpisodioEncontradoPorIdExterno | null> {
+  if (!Number.isFinite(tvdbId) || tvdbId <= 0) {
+    return null;
+  }
+
+  const dados = await buscarJsonComCache<RespostaBuscaIdExterno>(
+    `${URL_BASE}/find/${tvdbId}?external_source=tvdb_id&language=pt-BR`,
+    TEMPO_CACHE.detalhes
+  );
+
+  const episodios =
+    dados.tv_episode_results ?? [];
+
+  if (idSerieEsperada !== undefined) {
+    return (
+      episodios.find(
+        (episodio) =>
+          episodio.show_id === idSerieEsperada
+      ) ?? null
+    );
+  }
+
+  return episodios[0] ?? null;
 }
 
 

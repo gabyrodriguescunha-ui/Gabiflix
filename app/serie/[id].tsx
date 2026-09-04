@@ -173,7 +173,9 @@ function temporadaJaEstreou(data: string | null | undefined): boolean {
 }
 
 
-// Exibe a temporada quando ela já existe de verdade no TMDB
+// Exibe temporadas que realmente possuem episódios cadastrados no TMDB.
+// A data da temporada não é obrigatória, pois algumas séries, como One Piece,
+// possuem temporadas reais com episódios mesmo quando o TMDB não informa air_date.
 function temporadaPodeAparecer(
   temporada: {
     season_number: number;
@@ -183,8 +185,7 @@ function temporadaPodeAparecer(
 ): boolean {
   return (
     temporada.season_number > 0 &&
-    temporada.episode_count > 0 &&
-    Boolean(temporada.air_date)
+    temporada.episode_count > 0
   );
 }
 
@@ -370,10 +371,7 @@ export default function DetalhesDaSerie() {
 
         const temporadasRegulares =
           resultado.seasons.filter(
-            (item) =>
-              item.season_number > 0 &&
-              item.episode_count > 0 &&
-              temporadaJaEstreou(item.air_date)
+            temporadaPodeAparecer
           );
 
         const progressoCarregado =
@@ -414,10 +412,7 @@ export default function DetalhesDaSerie() {
 
         const primeiraTemporada =
           resultado.seasons.find(
-            (item) =>
-              item.season_number > 0 &&
-              item.episode_count > 0 &&
-              temporadaJaEstreou(item.air_date)
+            temporadaPodeAparecer
           );
 
         const numeroRecebido = Number(temporadaParametro);
@@ -1538,6 +1533,7 @@ export default function DetalhesDaSerie() {
                 item.episode_count;
 
             const temporadaFutura =
+              Boolean(item.air_date) &&
               !temporadaJaEstreou(item.air_date);
 
             return (

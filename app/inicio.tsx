@@ -31,6 +31,7 @@ import { supabase } from '../lib/supabase';
 import {
   buscarHistoricoAssistido,
   marcarEpisodiosAssistidos,
+  registroCorrespondeEpisodio,
   type RegistroEpisodioAssistido,
 } from '../services/episodios-assistidos.service';
 import { buscarMinhaLista } from '../services/minha-lista.service';
@@ -64,7 +65,7 @@ interface ItemContinuarHome {
 }
 
 
-const PREFIXO_CACHE_CONTINUAR = 'gabiflix:continuar-home:v3';
+const PREFIXO_CACHE_CONTINUAR = 'gabiflix:continuar-home:v4';
 const LIMITE_CONTINUAR_HOME = 5;
 
 function chaveCacheContinuar(usuarioId: string) {
@@ -260,7 +261,7 @@ export default function Inicio() {
           .slice(0, LIMITE_CONTINUAR_HOME);
 
         const idsAcompanhadas = new Set(
-          seriesAcompanhadas.map((item) => item.serie_id)
+          seriesAcompanhadas.map((item) => Number(item.serie_id))
         );
 
         const registrosPorSerie = new Map<number, RegistroEpisodioAssistido[]>();
@@ -271,11 +272,19 @@ export default function Inicio() {
         });
 
         historico.forEach((registro) => {
-          if (!idsAcompanhadas.has(registro.serie_id)) return;
+          const serieIdRegistro =
+            Number(registro.serie_id);
 
-          const atuais = registrosPorSerie.get(registro.serie_id) ?? [];
+          if (!idsAcompanhadas.has(serieIdRegistro)) return;
+
+          const atuais =
+            registrosPorSerie.get(serieIdRegistro) ?? [];
+
           atuais.push(registro);
-          registrosPorSerie.set(registro.serie_id, atuais);
+          registrosPorSerie.set(
+            serieIdRegistro,
+            atuais
+          );
         });
 
         const resultados = await Promise.all(
@@ -283,9 +292,19 @@ export default function Inicio() {
             async ([serieId, registros]): Promise<ItemContinuarHome | null> => {
               try {
                 const detalhes = await buscarDetalhesSerie(serieId);
-                const idsAssistidos = new Set(
-                  registros.map((registro) => registro.episodio_id)
-                );
+                const foiAssistido = (
+                  numeroTemporada: number,
+                  episodio: Episodio
+                ) =>
+                  registros.some((registro) =>
+                    registroCorrespondeEpisodio(
+                      registro,
+                      serieId,
+                      numeroTemporada,
+                      episodio.id,
+                      episodio.episode_number
+                    )
+                  );
 
                 const temporadas = detalhes.seasons
                   .filter(
@@ -293,7 +312,11 @@ export default function Inicio() {
                       temporada.season_number > 0 &&
                       temporada.episode_count > 0
                   )
-                  .sort((a, b) => a.season_number - b.season_number);
+                  .sort(
+                    (a, b) =>
+                      a.season_number -
+                      b.season_number
+                  );
 
                 // As temporadas são solicitadas juntas. O cache do tmdb.service
                 // reaproveita as respostas nas próximas visitas.
@@ -307,33 +330,104 @@ export default function Inicio() {
                   }))
                 );
 
-                for (const temporada of detalhesTemporadas) {
-                  const proximo = temporada.dados.episodes.find(
-                    (episodio) =>
-                      !idsAssistidos.has(episodio.id) &&
-                      episodioFoiLancado(episodio.air_date)
+                const episodiosOrdenados =
+                  detalhesTemporadas.flatMap(
+                    (temporada) =>
+                      temporada.dados.episodes
+                        .slice()
+                        .sort(
+                          (a, b) =>
+                            a.episode_number -
+                            b.episode_number
+                        )
+                        .map((episodio) => ({
+                          temporadaNumero:
+                            temporada.numero,
+                          episodio,
+                        }))
                   );
 
-                  if (!proximo) continue;
+                let indiceUltimoAssistido = -1;
 
-                  const assistidosNaTemporada = registros.filter(
-                    (registro) =>
-                      registro.temporada_numero === temporada.numero
-                  ).length;
+                episodiosOrdenados.forEach(
+                  (item, indice) => {
+                    if (
+                      foiAssistido(
+                        item.temporadaNumero,
+                        item.episodio
+                      )
+                    ) {
+                      indiceUltimoAssistido = indice;
+                    }
+                  }
+                );
 
-                  return {
-                    serieId,
-                    nome: detalhes.name,
-                    posterPath: detalhes.poster_path,
-                    temporadaNumero: temporada.numero,
-                    proximoEpisodioNumero: proximo.episode_number,
-                    proximoEpisodio: proximo,
-                    quantidadeAssistida: assistidosNaTemporada,
-                    totalEpisodios: temporada.dados.episodes.length,
-                  };
+                const candidatos =
+                  indiceUltimoAssistido >= 0
+                    ? episodiosOrdenados.slice(
+                        indiceUltimoAssistido + 1
+                      )
+                    : episodiosOrdenados;
+
+                const proximo =
+                  candidatos.find(
+                    (item) =>
+                      !foiAssistido(
+                        item.temporadaNumero,
+                        item.episodio
+                      ) &&
+                      episodioFoiLancado(
+                        item.episodio.air_date
+                      )
+                  );
+
+                if (!proximo) {
+                  return null;
                 }
 
-                return null;
+                const temporadaSelecionada =
+                  detalhesTemporadas.find(
+                    (item) =>
+                      item.numero ===
+                      proximo.temporadaNumero
+                  );
+
+                if (!temporadaSelecionada) {
+                  return null;
+                }
+
+                const episodiosLancados =
+                  temporadaSelecionada.dados.episodes.filter(
+                    (episodio) =>
+                      episodioFoiLancado(
+                        episodio.air_date
+                      )
+                  );
+
+                const assistidosNaTemporada =
+                  episodiosLancados.filter(
+                    (episodio) =>
+                      foiAssistido(
+                        proximo.temporadaNumero,
+                        episodio
+                      )
+                  ).length;
+
+                return {
+                  serieId,
+                  nome: detalhes.name,
+                  posterPath: detalhes.poster_path,
+                  temporadaNumero:
+                    proximo.temporadaNumero,
+                  proximoEpisodioNumero:
+                    proximo.episodio.episode_number,
+                  proximoEpisodio:
+                    proximo.episodio,
+                  quantidadeAssistida:
+                    assistidosNaTemporada,
+                  totalEpisodios:
+                    episodiosLancados.length,
+                };
               } catch (erro) {
                 console.log(
                   `Erro ao preparar série ${serieId} na Home:`,

@@ -10,6 +10,8 @@ import type {
 } from './minha-lista.service';
 import {
   buscarDetalhesTemporada,
+  buscarEpisodioPorTvdbId,
+  type EpisodioEncontradoPorIdExterno,
 } from './tmdb.service';
 
 // Série escolhida manualmente durante a revisão
@@ -401,42 +403,98 @@ export async function importarTvTimeParaGabiflix(
         `${item.serieTvTime.title} • T${temporada.number}`,
     });
 
-    let temporadaTmdb;
-
-    try {
-      temporadaTmdb =
-        await buscarDetalhesTemporada(
-          serieTmdb.id,
-          temporada.number
-        );
-    } catch {
-      // Se uma temporada inteira não existir no TMDB,
-      // contamos os episódios assistidos dela como não correspondidos.
-      episodiosNaoCorrespondidos +=
-        temporada.episodes.filter(
-          (episodio) =>
-            episodio.is_watched
-        ).length;
-
-      continue;
-    }
-
     const episodiosAssistidos =
       temporada.episodes.filter(
         (episodio) =>
           episodio.is_watched
       );
 
+    // A temporada equivalente só é carregada se precisarmos do fallback.
+    // Isso preserva o comportamento antigo para episódios sem TVDB ID.
+    let temporadaTmdb:
+      Awaited<ReturnType<typeof buscarDetalhesTemporada>> | null = null;
+    let tentouCarregarTemporada = false;
+
+    async function obterTemporadaFallback() {
+      if (tentouCarregarTemporada) {
+        return temporadaTmdb;
+      }
+
+      tentouCarregarTemporada = true;
+
+      try {
+        temporadaTmdb =
+          await buscarDetalhesTemporada(
+            serieTmdb.id,
+            temporada.number
+          );
+      } catch {
+        temporadaTmdb = null;
+      }
+
+      return temporadaTmdb;
+    }
+
     for (
       const episodioTvTime of
       episodiosAssistidos
     ) {
-      const episodioTmdb =
-        temporadaTmdb.episodes.find(
-          (episodio) =>
-            episodio.episode_number ===
-            episodioTvTime.number
-        );
+      let episodioTmdb:
+        EpisodioEncontradoPorIdExterno | null = null;
+
+      // Estratégia principal:
+      // cada episódio do export do TV Time possui seu próprio TVDB ID.
+      // Usamos esse identificador para obter a temporada e o número
+      // oficiais do episódio no TMDB, o que resolve séries cuja divisão
+      // de temporadas difere entre TV Time/TVDB e TMDB.
+      const tvdbIdEpisodio =
+        episodioTvTime.id?.tvdb;
+
+      if (tvdbIdEpisodio) {
+        try {
+          episodioTmdb =
+            await buscarEpisodioPorTvdbId(
+              tvdbIdEpisodio,
+              serieTmdb.id
+            );
+        } catch {
+          // Uma falha isolada no /find não cancela a importação.
+          // Abaixo ainda tentamos a correspondência antiga.
+          episodioTmdb = null;
+        }
+      }
+
+      // Fallback antigo:
+      // usado quando o episódio não possui TVDB ID ou quando o TMDB
+      // ainda não cadastrou esse identificador externo.
+      if (!episodioTmdb) {
+        const temporadaFallback =
+          await obterTemporadaFallback();
+
+        if (temporadaFallback) {
+          const episodioFallback =
+            temporadaFallback.episodes.find(
+              (episodio) =>
+                episodio.episode_number ===
+                episodioTvTime.number
+            );
+
+          if (episodioFallback) {
+            episodioTmdb = {
+              id: episodioFallback.id,
+              name: episodioFallback.name,
+              air_date: episodioFallback.air_date,
+              episode_number:
+                episodioFallback.episode_number,
+              season_number:
+                temporadaFallback.season_number,
+              show_id: serieTmdb.id,
+              still_path:
+                episodioFallback.still_path,
+            };
+          }
+        }
+      }
 
       if (!episodioTmdb) {
         episodiosNaoCorrespondidos += 1;
@@ -461,8 +519,13 @@ export async function importarTvTimeParaGabiflix(
       registrosEpisodios.push({
         user_id: usuario.id,
         serie_id: serieTmdb.id,
+
+        // IMPORTANTE:
+        // salvamos a temporada e o número retornados pelo TMDB,
+        // não os números do TV Time. Isso mantém o histórico alinhado
+        // com as telas Detalhes, Home e Continuar assistindo.
         temporada_numero:
-          temporada.number,
+          episodioTmdb.season_number,
         episodio_id:
           episodioTmdb.id,
         episodio_numero:
