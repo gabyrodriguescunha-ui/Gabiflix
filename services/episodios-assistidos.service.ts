@@ -141,6 +141,104 @@ export async function buscarTodosEpisodiosAssistidosDaSerie(
 }
 
 
+// Busca somente os episódios mais recentes para o primeiro carregamento.
+// A tela pode exibir conteúdo quase imediatamente e completar o histórico
+// inteiro em segundo plano logo depois.
+export interface PaginaHistoricoAssistido {
+  dados: RegistroEpisodioAssistido[];
+  temMais: boolean;
+}
+
+// Busca apenas uma página do histórico. Diferente de buscarHistoricoAssistido(),
+// esta função nunca baixa o histórico inteiro em segundo plano.
+export async function buscarPaginaHistoricoAssistido(
+  pagina: number,
+  tamanhoPagina: number = 100
+): Promise<PaginaHistoricoAssistido> {
+  const usuario = await obterUsuarioConectado();
+
+  const paginaSegura = Math.max(0, pagina);
+  const tamanhoSeguro = Math.max(1, tamanhoPagina);
+  const inicio = paginaSegura * tamanhoSeguro;
+
+  // Busca um registro extra apenas para descobrir se existe próxima página.
+  const fim = inicio + tamanhoSeguro;
+
+  const { data, error } = await supabase
+    .from('episodios_assistidos')
+    .select(
+      'id, serie_id, temporada_numero, episodio_id, episodio_numero, episodio_nome, imagem_path, assistido_em'
+    )
+    .eq('user_id', usuario.id)
+    .order('assistido_em', { ascending: false })
+    .range(inicio, fim);
+
+  if (error) {
+    throw error;
+  }
+
+  const registros = ((data ?? []) as RegistroEpisodioAssistido[])
+    .map(normalizarRegistroEpisodio);
+
+  return {
+    dados: registros.slice(0, tamanhoSeguro),
+    temMais: registros.length > tamanhoSeguro,
+  };
+}
+
+
+export async function buscarHistoricoAssistidoRecente(
+  limite: number = 200
+): Promise<RegistroEpisodioAssistido[]> {
+  const usuario = await obterUsuarioConectado();
+
+  // Se o histórico completo já estiver em cache, reaproveitamos os primeiros
+  // registros sem fazer uma nova consulta ao Supabase.
+  const salvo = cacheHistorico.get(usuario.id);
+  if (salvo && salvo.expiraEm > Date.now()) {
+    return salvo.dados.slice(0, limite);
+  }
+
+  const { data, error } = await supabase
+    .from('episodios_assistidos')
+    .select(
+      'id, serie_id, temporada_numero, episodio_id, episodio_numero, episodio_nome, imagem_path, assistido_em'
+    )
+    .eq('user_id', usuario.id)
+    .order('assistido_em', { ascending: false })
+    .limit(limite);
+
+  if (error) {
+    throw error;
+  }
+
+  return ((data ?? []) as RegistroEpisodioAssistido[])
+    .map(normalizarRegistroEpisodio);
+}
+
+
+// Conta quantos episódios o usuário marcou como assistidos sem baixar
+// todos os registros. É usado em telas que precisam apenas da quantidade,
+// como o Perfil.
+export async function contarEpisodiosAssistidos(): Promise<number> {
+  const usuario = await obterUsuarioConectado();
+
+  const { count, error } = await supabase
+    .from('episodios_assistidos')
+    .select('id', {
+      count: 'exact',
+      head: true,
+    })
+    .eq('user_id', usuario.id);
+
+  if (error) {
+    throw error;
+  }
+
+  return count ?? 0;
+}
+
+
 // Busca todo o histórico necessário para montar o resumo de cada série
 export async function buscarHistoricoAssistido(): Promise<
   RegistroEpisodioAssistido[]

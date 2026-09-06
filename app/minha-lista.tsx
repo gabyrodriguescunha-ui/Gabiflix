@@ -19,6 +19,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 // Navegação e evento disparado quando a página recebe foco
 import { useFocusEffect, useRouter } from 'expo-router';
+import { voltarOuInicio } from '../utils/navegacao';
 // Mantém o conteúdo distante das barras do aparelho
 import { SafeAreaView } from 'react-native-safe-area-context';
 // Recupera os registros salvos no Supabase
@@ -433,9 +434,9 @@ export default function MinhaLista() {
         <TouchableOpacity
           style={styles.botaoVoltar}
           activeOpacity={0.7}
-          onPress={router.back}
+          onPress={voltarOuInicio}
         >
-          <Ionicons name="arrow-back" size={24} color="#FFFFFF" />
+          <Ionicons name="chevron-back" size={26} color="#E91E63" />
         </TouchableOpacity>
 
         <View style={styles.titulos}>

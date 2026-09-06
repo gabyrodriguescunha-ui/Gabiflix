@@ -2,7 +2,7 @@
 
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -13,9 +13,11 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
-  buscarHistoricoAssistido,
+  buscarPaginaHistoricoAssistido,
+  contarEpisodiosAssistidos,
   type RegistroEpisodioAssistido,
 } from '../services/episodios-assistidos.service';
+import { buscarMinhaLista } from '../services/minha-lista.service';
 import { buscarDetalhesSerie } from '../services/tmdb.service';
 import { styles } from '../styles/historico-episodios.styles';
 
@@ -63,72 +65,205 @@ export default function HistoricoEpisodios() {
 
   const [itens, setItens] = useState<ItemHistorico[]>([]);
   const [carregando, setCarregando] = useState(true);
+  const [carregandoMais, setCarregandoMais] = useState(false);
   const [mensagemErro, setMensagemErro] = useState('');
   const [tentativa, setTentativa] = useState(0);
+  const [paginaAtual, setPaginaAtual] = useState(0);
+  const [temMais, setTemMais] = useState(true);
+  const [totalHistorico, setTotalHistorico] = useState(0);
+
+  const nomesPorSerieRef = useRef(new Map<number, string>());
+  const paginaAtivaRef = useRef(true);
+  const carregandoMaisRef = useRef(false);
+
+  const TAMANHO_PAGINA = 100;
+
+  const preencherNomes = useCallback(
+    async (
+      historico: RegistroEpisodioAssistido[]
+    ): Promise<ItemHistorico[]> => {
+      const mapa = nomesPorSerieRef.current;
+
+      const idsFaltantes = Array.from(
+        new Set(
+          historico
+            .map((item) => Number(item.serie_id))
+            .filter((serieId) => !mapa.has(serieId))
+        )
+      );
+
+      await Promise.all(
+        idsFaltantes.map(async (serieId) => {
+          try {
+            const detalhes = await buscarDetalhesSerie(serieId);
+            mapa.set(serieId, detalhes.name);
+          } catch (erro) {
+            console.log(
+              `Erro ao buscar nome da série ${serieId} no histórico:`,
+              erro
+            );
+            mapa.set(serieId, 'Série');
+          }
+        })
+      );
+
+      return historico.map((item) => ({
+        ...item,
+        nomeSerie:
+          mapa.get(Number(item.serie_id)) ?? 'Série',
+      }));
+    },
+    []
+  );
 
   useFocusEffect(
     useCallback(() => {
-      let paginaAtiva = true;
+      paginaAtivaRef.current = true;
 
-      async function carregarHistorico() {
+      async function carregarPrimeiraPagina() {
         try {
           setCarregando(true);
           setMensagemErro('');
+          setPaginaAtual(0);
+          setTemMais(true);
 
-          const historico = await buscarHistoricoAssistido();
+          // Minha Lista fornece a maioria dos nomes sem chamadas extras ao TMDB.
+          // A contagem total é leve e não baixa todos os episódios.
+          const [pagina, minhaLista, total] = await Promise.all([
+            buscarPaginaHistoricoAssistido(0, TAMANHO_PAGINA),
+            buscarMinhaLista(),
+            contarEpisodiosAssistidos(),
+          ]);
 
-          const idsSeries = Array.from(
-            new Set(historico.map((item) => item.serie_id))
-          );
-
-          const nomesPorSerie = new Map<number, string>();
-
-          await Promise.all(
-            idsSeries.map(async (serieId) => {
-              try {
-                const detalhes = await buscarDetalhesSerie(serieId);
-                nomesPorSerie.set(serieId, detalhes.name);
-              } catch (erro) {
-                console.log(
-                  `Erro ao buscar nome da série ${serieId} no histórico:`,
-                  erro
-                );
-                nomesPorSerie.set(serieId, 'Série');
-              }
-            })
-          );
-
-          if (!paginaAtiva) {
+          if (!paginaAtivaRef.current) {
             return;
           }
 
-          const resultado: ItemHistorico[] = historico.map((item) => ({
-            ...item,
-            nomeSerie: nomesPorSerie.get(item.serie_id) ?? 'Série',
-          }));
+          nomesPorSerieRef.current = new Map(
+            minhaLista.map((serie) => [
+              Number(serie.serie_id),
+              serie.nome,
+            ])
+          );
 
-          setItens(resultado);
+          // Mostra a primeira página antes de resolver nomes raros que não
+          // estejam mais presentes na Minha Lista.
+          setItens(
+            pagina.dados.map((item) => ({
+              ...item,
+              nomeSerie:
+                nomesPorSerieRef.current.get(
+                  Number(item.serie_id)
+                ) ?? 'Série',
+            }))
+          );
+          setTotalHistorico(total);
+          setTemMais(pagina.temMais);
+          setCarregando(false);
+
+          const completos = await preencherNomes(pagina.dados);
+
+          if (paginaAtivaRef.current) {
+            setItens(completos);
+          }
         } catch (erro) {
-          console.log('Erro ao carregar histórico de episódios:', erro);
+          console.log(
+            'Erro ao carregar histórico de episódios:',
+            erro
+          );
 
-          if (paginaAtiva) {
+          if (paginaAtivaRef.current) {
             setItens([]);
-            setMensagemErro('Não foi possível carregar seu histórico.');
+            setMensagemErro(
+              'Não foi possível carregar seu histórico.'
+            );
           }
         } finally {
-          if (paginaAtiva) {
+          if (paginaAtivaRef.current) {
             setCarregando(false);
           }
         }
       }
 
-      carregarHistorico();
+      carregarPrimeiraPagina();
 
       return () => {
-        paginaAtiva = false;
+        paginaAtivaRef.current = false;
       };
-    }, [tentativa])
+    }, [tentativa, preencherNomes])
   );
+
+  const carregarMais = useCallback(async () => {
+    if (
+      carregando ||
+      carregandoMaisRef.current ||
+      !temMais
+    ) {
+      return;
+    }
+
+    carregandoMaisRef.current = true;
+    setCarregandoMais(true);
+
+    const proximaPagina = paginaAtual + 1;
+
+    try {
+      const pagina = await buscarPaginaHistoricoAssistido(
+        proximaPagina,
+        TAMANHO_PAGINA
+      );
+
+      if (!paginaAtivaRef.current) {
+        return;
+      }
+
+      // Acrescenta a página imediatamente; nomes ausentes são completados
+      // depois sem bloquear a rolagem nem a navegação.
+      const novosBasicos: ItemHistorico[] =
+        pagina.dados.map((item) => ({
+          ...item,
+          nomeSerie:
+            nomesPorSerieRef.current.get(
+              Number(item.serie_id)
+            ) ?? 'Série',
+        }));
+
+      setItens((atuais) => [...atuais, ...novosBasicos]);
+      setPaginaAtual(proximaPagina);
+      setTemMais(pagina.temMais);
+
+      const novosCompletos =
+        await preencherNomes(pagina.dados);
+
+      if (paginaAtivaRef.current) {
+        const completosPorId = new Map(
+          novosCompletos.map((item) => [item.id, item])
+        );
+
+        setItens((atuais) =>
+          atuais.map(
+            (item) => completosPorId.get(item.id) ?? item
+          )
+        );
+      }
+    } catch (erro) {
+      console.log(
+        'Erro ao carregar mais episódios do histórico:',
+        erro
+      );
+    } finally {
+      carregandoMaisRef.current = false;
+
+      if (paginaAtivaRef.current) {
+        setCarregandoMais(false);
+      }
+    }
+  }, [
+    carregando,
+    paginaAtual,
+    preencherNomes,
+    temMais,
+  ]);
 
   const grupos = useMemo<GrupoHistorico[]>(() => {
     const mapa = new Map<string, ItemHistorico[]>();
@@ -162,7 +297,7 @@ export default function HistoricoEpisodios() {
         <TouchableOpacity
           style={styles.botaoVoltar}
           activeOpacity={0.7}
-          onPress={() => router.back()}
+          onPress={() => router.replace('/perfil')}
           accessibilityLabel="Voltar"
         >
           <Ionicons name="chevron-back" size={26} color="#E91E63" />
@@ -171,7 +306,7 @@ export default function HistoricoEpisodios() {
         <View>
           <Text style={styles.titulo}>Histórico de episódios</Text>
           <Text style={styles.subtitulo}>
-            {itens.length} {itens.length === 1 ? 'episódio assistido' : 'episódios assistidos'}
+            {totalHistorico} {totalHistorico === 1 ? 'episódio assistido' : 'episódios assistidos'}
           </Text>
         </View>
       </View>
@@ -229,6 +364,18 @@ export default function HistoricoEpisodios() {
           }
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.lista}
+          onEndReached={carregarMais}
+          onEndReachedThreshold={0.35}
+          ListFooterComponent={
+            carregandoMais ? (
+              <View style={{ paddingVertical: 18 }}>
+                <ActivityIndicator
+                  size="small"
+                  color="#E91E63"
+                />
+              </View>
+            ) : null
+          }
           renderItem={({ item: registro }) => {
             if (registro.tipo === 'grupo') {
               return (

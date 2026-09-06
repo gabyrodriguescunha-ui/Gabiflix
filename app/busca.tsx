@@ -417,9 +417,9 @@ export default function Busca() {
           onPress={router.back}
         >
           <Ionicons
-            name="arrow-back"
-            size={24}
-            color="#FFFFFF"
+            name="chevron-back"
+            size={26}
+            color="#E91E63"
           />
         </TouchableOpacity>
 

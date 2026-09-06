@@ -15,6 +15,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 // Recursos da rota dinâmica e da navegação
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { voltarOuInicio } from '../../utils/navegacao';
 // Protege o conteúdo das barras do celular
 import { SafeAreaView } from 'react-native-safe-area-context';
 // Busca os detalhes, temporadas e monta as URLs das imagens
@@ -1213,7 +1214,7 @@ export default function DetalhesDaSerie() {
 
         <TouchableOpacity
           style={styles.botaoVoltarErro}
-          onPress={router.back}
+          onPress={voltarOuInicio}
         >
           <Text style={styles.textoBotaoVoltar}>
             Voltar
@@ -1247,7 +1248,7 @@ export default function DetalhesDaSerie() {
         <TouchableOpacity
           style={styles.botaoVoltar}
           activeOpacity={0.7}
-          onPress={router.back}
+          onPress={voltarOuInicio}
         >
           <Ionicons
             name="chevron-back"

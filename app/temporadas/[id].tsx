@@ -16,6 +16,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 // Recupera o ID da rota e permite voltar
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { voltarOuInicio } from '../../utils/navegacao';
 // Protege o conteúdo das barras do aparelho
 import { SafeAreaView } from 'react-native-safe-area-context';
 // Funções responsáveis pelas requisições e imagens
@@ -27,6 +28,7 @@ import {
 // Funções responsáveis por consultar e alterar o progresso do usuário
 import {
   buscarEpisodiosAssistidos,
+  buscarTodosEpisodiosAssistidosDaSerie,
   desmarcarEpisodioAssistido,
   marcarEpisodiosAssistidos,
 } from '../../services/episodios-assistidos.service';
@@ -36,6 +38,11 @@ import type {
   DetalhesTemporada,
   Episodio,
 } from '../../types/serie';
+// Atualiza automaticamente o status da série quando todo o conteúdo foi assistido
+import {
+  atualizarStatusSerie,
+  buscarSerieNaLista,
+} from '../../services/minha-lista.service';
 // Estilos exclusivos da página
 import { styles } from '../../styles/temporadas.styles';
 
@@ -203,6 +210,95 @@ export default function Temporadas() {
     tentativaTemporada,
   ]);
 
+  // Confere se uma série encerrada teve todos os episódios já lançados assistidos.
+  // Séries ainda em produção não são finalizadas automaticamente só porque
+  // o usuário está em dia com os episódios disponíveis.
+  async function verificarFinalizacaoAutomatica() {
+    if (
+      !serie ||
+      (serie.status !== 'Ended' &&
+        serie.status !== 'Canceled')
+    ) {
+      return;
+    }
+
+    const temporadasComEpisodios =
+      serie.seasons.filter(
+        (item) =>
+          item.season_number > 0 &&
+          item.episode_count > 0
+      );
+
+    if (temporadasComEpisodios.length === 0) {
+      return;
+    }
+
+    const [detalhesTemporadas, idsAssistidos] =
+      await Promise.all([
+        Promise.all(
+          temporadasComEpisodios.map((item) =>
+            buscarDetalhesTemporada(
+              idSerie,
+              item.season_number
+            )
+          )
+        ),
+        buscarTodosEpisodiosAssistidosDaSerie(
+          idSerie
+        ),
+      ]);
+
+    const idsAssistidosSet =
+      new Set(idsAssistidos);
+
+    const episodiosLancados =
+      detalhesTemporadas.flatMap(
+        (detalhes) =>
+          detalhes.episodes.filter(
+            (episodio) =>
+              episodioFoiLancado(
+                episodio.air_date
+              )
+          )
+      );
+
+    if (episodiosLancados.length === 0) {
+      return;
+    }
+
+    const todosAssistidos =
+      episodiosLancados.every(
+        (episodio) =>
+          idsAssistidosSet.has(episodio.id)
+      );
+
+    if (!todosAssistidos) {
+      return;
+    }
+
+    await atualizarStatusSerie(
+      idSerie,
+      'finalizada'
+    );
+  }
+
+  // Se um episódio for desmarcado de uma série que estava finalizada,
+  // ela volta para "Assistindo" para manter a Minha Lista coerente.
+  async function sincronizarStatusAposDesmarcar() {
+    const itemNaLista =
+      await buscarSerieNaLista(idSerie);
+
+    if (
+      itemNaLista?.status_usuario ===
+      'finalizada'
+    ) {
+      await atualizarStatusSerie(
+        idSerie,
+        'assistindo'
+      );
+    }
+  }
+
   // Salva um ou vários episódios e atualiza os círculos da interface
   async function salvarEpisodiosComoAssistidos(episodios: Episodio[]) {
     if (episodios.length === 0) {
@@ -218,6 +314,17 @@ export default function Temporadas() {
         numeroSelecionado,
         episodios
       );
+
+      // Depois de salvar o progresso, verifica se uma série já encerrada
+      // teve todos os episódios lançados concluídos.
+      try {
+        await verificarFinalizacaoAutomatica();
+      } catch (erro) {
+        console.log(
+          'Erro ao verificar finalização automática:',
+          erro
+        );
+      }
 
       setEpisodiosAssistidos((estadoAtual) => {
         const novoEstado = new Set(estadoAtual);
@@ -246,6 +353,15 @@ export default function Temporadas() {
       try {
         setEpisodioSendoAlterado(episodio.id);
         await desmarcarEpisodioAssistido(episodio.id);
+
+        try {
+          await sincronizarStatusAposDesmarcar();
+        } catch (erro) {
+          console.log(
+            'Erro ao sincronizar status após desmarcar:',
+            erro
+          );
+        }
 
         setEpisodiosAssistidos((estadoAtual) => {
           const novoEstado = new Set(estadoAtual);
@@ -362,7 +478,7 @@ export default function Temporadas() {
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       {/* Cabeçalho da página */}
       <View style={styles.cabecalho}>
-        <TouchableOpacity style={styles.botaoVoltar} onPress={router.back}>
+        <TouchableOpacity style={styles.botaoVoltar} onPress={voltarOuInicio}>
           <Ionicons name="arrow-back" size={24} color="#FFFFFF" />
         </TouchableOpacity>
 

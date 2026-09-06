@@ -4,6 +4,7 @@
 import {
   useCallback,
   useMemo,
+  useRef,
   useState,
 } from 'react';
 // Componentes visuais utilizados na página
@@ -19,6 +20,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 // Navegação e evento disparado ao entrar novamente na página
 import { useFocusEffect, useRouter } from 'expo-router';
+import { voltarOuInicio } from '../utils/navegacao';
 // Mantém o conteúdo distante das barras do aparelho
 import { SafeAreaView } from 'react-native-safe-area-context';
 // Recupera as séries pertencentes à lista do usuário
@@ -175,6 +177,10 @@ export default function Calendario() {
   const [tentativaCarregamento, setTentativaCarregamento] =
     useState(0);
 
+  // Depois do primeiro carregamento, mantemos o calendário atual visível
+  // enquanto os próximos episódios são revalidados em segundo plano.
+  const primeiroCarregamentoConcluido = useRef(false);
+
   // Busca a lista e consulta o próximo episódio de cada série
   useFocusEffect(
     useCallback(() => {
@@ -182,7 +188,10 @@ export default function Calendario() {
 
       async function carregarCalendario() {
         try {
-          setCarregando(true);
+          if (!primeiroCarregamentoConcluido.current) {
+            setCarregando(true);
+          }
+
           setMensagemErro('');
 
           const lista =
@@ -285,13 +294,23 @@ export default function Calendario() {
           );
 
           if (paginaAtiva) {
-            setItens([]);
-            setMensagemErro(
-              'Não foi possível carregar seus próximos episódios.'
-            );
+            // No primeiro carregamento ainda mostramos o estado de erro.
+            // Em atualizações posteriores preservamos os dados já exibidos
+            // para uma falha temporária não apagar o calendário da tela.
+            if (!primeiroCarregamentoConcluido.current) {
+              setItens([]);
+              setMensagemErro(
+                'Não foi possível carregar seus próximos episódios.'
+              );
+            } else {
+              console.log(
+                'Falha temporária ao atualizar calendário; mantendo dados atuais.'
+              );
+            }
           }
         } finally {
           if (paginaAtiva) {
+            primeiroCarregamentoConcluido.current = true;
             setCarregando(false);
           }
         }
@@ -337,7 +356,7 @@ export default function Calendario() {
         <TouchableOpacity
           style={styles.botaoVoltar}
           activeOpacity={0.7}
-          onPress={router.back}
+          onPress={voltarOuInicio}
         >
           <Ionicons
             name="chevron-back"

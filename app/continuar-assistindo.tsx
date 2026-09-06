@@ -2,7 +2,7 @@
 
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -13,6 +13,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { voltarOuInicio } from '../utils/navegacao';
 // Histórico salvo pelo usuário no Supabase
 import {
   buscarHistoricoAssistido,
@@ -117,6 +118,11 @@ export default function ContinuarAssistindo() {
   const [atualizando, setAtualizando] = useState(false);
   const [episodioSendoMarcado, setEpisodioSendoMarcado] = useState<number | null>(null);
 
+  // Depois do primeiro carregamento, mantemos os cards atuais na tela enquanto
+  // os dados são revalidados em segundo plano. Isso evita voltar para uma tela
+  // vazia com spinner toda vez que o usuário retorna ao Continuar assistindo.
+  const primeiroCarregamentoConcluido = useRef(false);
+
   // Recarrega o progresso sempre que a página volta a ficar visível
   useFocusEffect(
     useCallback(() => {
@@ -124,7 +130,10 @@ export default function ContinuarAssistindo() {
 
       async function carregarProgresso() {
         try {
-          setCarregando(true);
+          if (!primeiroCarregamentoConcluido.current) {
+            setCarregando(true);
+          }
+
           setMensagemErro('');
 
           const [historico, minhaLista] = await Promise.all([
@@ -212,9 +221,48 @@ export default function ContinuarAssistindo() {
                           b.season_number
                       );
 
+                  // Não precisamos baixar todas as temporadas antigas para descobrir
+                  // onde o usuário deve continuar. O histórico já informa a temporada
+                  // mais avançada que possui progresso; carregamos essa temporada e
+                  // somente as posteriores. Em séries longas, como One Piece, isso
+                  // reduz dezenas de chamadas ao TMDB para apenas as temporadas atuais.
+                  const maiorTemporadaNoHistorico =
+                    registros.reduce(
+                      (maior, registro) =>
+                        Math.max(
+                          maior,
+                          Number(registro.temporada_numero) || 0
+                        ),
+                      0
+                    );
+
+                  const primeiraTemporadaDisponivel =
+                    temporadasRegulares[0]
+                      ?.season_number ?? 1;
+
+                  const temporadaInicialBusca =
+                    maiorTemporadaNoHistorico > 0
+                      ? maiorTemporadaNoHistorico
+                      : primeiraTemporadaDisponivel;
+
+                  const temporadasParaConsultar =
+                    temporadasRegulares.filter(
+                      (temporada) =>
+                        temporada.season_number >=
+                        temporadaInicialBusca
+                    );
+
+                  // Se o histórico antigo apontar para uma temporada que não exista
+                  // mais no resumo atual do TMDB, usamos a primeira temporada válida
+                  // em vez de deixar a série sem dados.
+                  const temporadasEfetivas =
+                    temporadasParaConsultar.length > 0
+                      ? temporadasParaConsultar
+                      : temporadasRegulares;
+
                   const temporadasDetalhadas =
                     await Promise.all(
-                      temporadasRegulares.map(
+                      temporadasEfetivas.map(
                         async (resumoTemporada) => ({
                           numero:
                             resumoTemporada.season_number,
@@ -297,8 +345,11 @@ export default function ContinuarAssistindo() {
                     );
 
                   let temporadaDestino =
+                    temporadasEfetivas[0]
+                      ?.season_number ??
                     temporadasRegulares[0]
-                      ?.season_number ?? 1;
+                      ?.season_number ??
+                    1;
 
                   let proximoEpisodioNumero:
                     | number
@@ -498,6 +549,7 @@ export default function ContinuarAssistindo() {
           }
         } finally {
           if (paginaAtiva) {
+            primeiroCarregamentoConcluido.current = true;
             setCarregando(false);
             setAtualizando(false);
           }
@@ -578,7 +630,9 @@ export default function ContinuarAssistindo() {
         [item.proximoEpisodio]
       );
 
-      // Recarrega imediatamente para o card avançar ao próximo episódio.
+      // Revalida o progresso para o card avançar ao próximo episódio.
+      // Como já houve o primeiro carregamento, os cards permanecem visíveis
+      // durante essa atualização em segundo plano.
       setTentativaCarregamento((valorAtual) => valorAtual + 1);
     } catch (erro) {
       console.log('Erro ao marcar episódio pelo Continuar assistindo:', erro);
@@ -718,8 +772,8 @@ export default function ContinuarAssistindo() {
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       <View style={styles.cabecalho}>
-        <TouchableOpacity style={styles.botaoVoltar} onPress={router.back}>
-          <Ionicons name="arrow-back" size={24} color="#FFFFFF" />
+        <TouchableOpacity style={styles.botaoVoltar} onPress={voltarOuInicio}>
+          <Ionicons name="chevron-back" size={26} color="#E91E63" />
         </TouchableOpacity>
         <View>
           <Text style={styles.titulo}>Continuar assistindo</Text>

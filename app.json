@@ -27,17 +27,20 @@
       [
         "expo-splash-screen",
         {
-         "image": "./assets/images/splash-gabiflix.png",
-    "imageWidth": 220,
-    "resizeMode": "contain",
-    "backgroundColor": "#E91E63",
-    "dark": {
-      "image": "./assets/images/splash-gabiflix.png",
-      "backgroundColor": "#E91E63"
+          "image": "./assets/images/splash-gabiflix.png",
+          "imageWidth": 220,
+          "resizeMode": "contain",
+          "backgroundColor": "#E91E63",
+          "dark": {
+            "image": "./assets/images/splash-gabiflix.png",
+            "backgroundColor": "#E91E63"
           }
         }
       ],
-      "expo-font"
+      "expo-font",
+      "expo-image",
+      "expo-web-browser",
+      "expo-status-bar"
     ],
     "experiments": {
       "typedRoutes": true,
