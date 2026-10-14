@@ -124,7 +124,9 @@ export async function buscarMinhaLista(
     .eq('user_id', usuario.id)
     .order('criado_em', {
       ascending: false,
-    });
+      nullsFirst: false,
+    })
+    .order('id', { ascending: false });
 
   if (error) {
     throw error;
@@ -204,6 +206,7 @@ export async function adicionarSerieNaLista(
           0,
           4
         ) || null,
+      criado_em: new Date().toISOString(),
       status_usuario: 'quero_assistir',
       favorita: false,
     });

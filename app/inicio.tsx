@@ -728,9 +728,23 @@ export default function Inicio() {
                       </Text>
 
                       <View style={styles.linhaEpisodioContinuar}>
-                        <Text style={styles.episodioContinuar}>
-                          T{item.temporadaNumero} • E{item.proximoEpisodioNumero}
-                        </Text>
+                        <View style={styles.infoEpisodioContinuar}>
+                          <Text style={styles.episodioContinuar}>
+                            T{item.temporadaNumero} • E{item.proximoEpisodioNumero}
+                          </Text>
+
+                          {Math.max(
+                            item.totalEpisodios - item.quantidadeAssistida,
+                            0
+                          ) > 0 && (
+                            <Text style={styles.episodiosRestantesContinuar}>
+                              +{Math.max(
+                                item.totalEpisodios - item.quantidadeAssistida,
+                                0
+                              )}
+                            </Text>
+                          )}
+                        </View>
 
                         <TouchableOpacity
                           style={[

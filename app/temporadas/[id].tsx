@@ -28,7 +28,6 @@ import {
 // Funções responsáveis por consultar e alterar o progresso do usuário
 import {
   buscarEpisodiosAssistidos,
-  buscarTodosEpisodiosAssistidosDaSerie,
   desmarcarEpisodioAssistido,
   marcarEpisodiosAssistidos,
 } from '../../services/episodios-assistidos.service';
@@ -39,6 +38,7 @@ import type {
   Episodio,
 } from '../../types/serie';
 // Atualiza automaticamente o status da série quando todo o conteúdo foi assistido
+import { verificarFinalizacaoSerie } from '../../services/finalizacao-serie.service';
 import {
   atualizarStatusSerie,
   buscarSerieNaLista,
@@ -210,78 +210,6 @@ export default function Temporadas() {
     tentativaTemporada,
   ]);
 
-  // Confere se uma série encerrada teve todos os episódios já lançados assistidos.
-  // Séries ainda em produção não são finalizadas automaticamente só porque
-  // o usuário está em dia com os episódios disponíveis.
-  async function verificarFinalizacaoAutomatica() {
-    if (
-      !serie ||
-      (serie.status !== 'Ended' &&
-        serie.status !== 'Canceled')
-    ) {
-      return;
-    }
-
-    const temporadasComEpisodios =
-      serie.seasons.filter(
-        (item) =>
-          item.season_number > 0 &&
-          item.episode_count > 0
-      );
-
-    if (temporadasComEpisodios.length === 0) {
-      return;
-    }
-
-    const [detalhesTemporadas, idsAssistidos] =
-      await Promise.all([
-        Promise.all(
-          temporadasComEpisodios.map((item) =>
-            buscarDetalhesTemporada(
-              idSerie,
-              item.season_number
-            )
-          )
-        ),
-        buscarTodosEpisodiosAssistidosDaSerie(
-          idSerie
-        ),
-      ]);
-
-    const idsAssistidosSet =
-      new Set(idsAssistidos);
-
-    const episodiosLancados =
-      detalhesTemporadas.flatMap(
-        (detalhes) =>
-          detalhes.episodes.filter(
-            (episodio) =>
-              episodioFoiLancado(
-                episodio.air_date
-              )
-          )
-      );
-
-    if (episodiosLancados.length === 0) {
-      return;
-    }
-
-    const todosAssistidos =
-      episodiosLancados.every(
-        (episodio) =>
-          idsAssistidosSet.has(episodio.id)
-      );
-
-    if (!todosAssistidos) {
-      return;
-    }
-
-    await atualizarStatusSerie(
-      idSerie,
-      'finalizada'
-    );
-  }
-
   // Se um episódio for desmarcado de uma série que estava finalizada,
   // ela volta para "Assistindo" para manter a Minha Lista coerente.
   async function sincronizarStatusAposDesmarcar() {
@@ -315,10 +243,9 @@ export default function Temporadas() {
         episodios
       );
 
-      // Depois de salvar o progresso, verifica se uma série já encerrada
-      // teve todos os episódios lançados concluídos.
+      // Depois de salvar, confere todos os episódios disponíveis da série.
       try {
-        await verificarFinalizacaoAutomatica();
+        await verificarFinalizacaoSerie(idSerie);
       } catch (erro) {
         console.log(
           'Erro ao verificar finalização automática:',

@@ -1,301 +1,190 @@
-// PÁGINA QUE EXIBE AS SÉRIES SALVAS PELO USUÁRIO
+// PÁGINA DE PERFIL DO USUÁRIO
 
-// Hooks utilizados para carregar novamente a lista ao retornar para a página
-import { useCallback, useMemo, useState } from 'react';
-// Componentes visuais do React Native
+// Hooks utilizados para carregar novamente os dados ao retornar para a página
+import { useCallback, useState } from 'react';
+// Componentes visuais utilizados na página
 import {
   ActivityIndicator,
-  FlatList,
   Image,
-  Modal,
-  Pressable,
   ScrollView,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
-// Ícones usados no cabeçalho, avaliação e estado sem capa
+// Ícones utilizados nas informações e atalhos
 import { Ionicons } from '@expo/vector-icons';
 // Navegação e evento disparado quando a página recebe foco
 import { useFocusEffect, useRouter } from 'expo-router';
-import { voltarOuInicio } from '../utils/navegacao';
 // Mantém o conteúdo distante das barras do aparelho
 import { SafeAreaView } from 'react-native-safe-area-context';
-// Recupera os registros salvos no Supabase
+// Cliente responsável pela autenticação e dados da conta
+import { supabase } from '../lib/supabase';
+// Recupera as séries armazenadas na lista pessoal
 import {
-  atualizarStatusSerie,
   buscarMinhaLista,
-  excluirSerieCompletamente,
   type ItemMinhaLista,
-  type StatusUsuario,
 } from '../services/minha-lista.service';
-// Monta a URL completa de cada capa do TMDB
-import { obterUrlCapaPequena } from '../services/tmdb.service';
-// Modal personalizado utilizado nas confirmações do Gabiflix
+// Recupera todo o histórico de episódios assistidos
+import {
+  contarEpisodiosAssistidos,
+} from '../services/episodios-assistidos.service';
+// Estilos exclusivos da página
 import { ModalConfirmacao } from '../components/modal-confirmacao/ModalConfirmacao';
-// Estilos exclusivos desta página
-import { styles } from '../styles/minha-lista.styles';
+import { styles } from '../styles/perfil.styles';
 
 
-// Representa os filtros disponíveis no topo da página
-type FiltroLista =
-  | 'assistindo'
-  | 'quero_assistir'
-  | 'pausada'
-  | 'finalizada'
-  | 'abandonada'
-  | 'reassistindo';
+// Estrutura utilizada para guardar os números apresentados no perfil
+interface EstatisticasPerfil {
+  totalSeries: number;
+  assistindo: number;
+  queroAssistir: number;
+  pausadas: number;
+  reassistindo: number;
+  abandonadas: number;
+  episodiosAssistidos: number;
+}
 
-// Representa as opções disponíveis para ordenar a lista
-type OrdenacaoLista =
-  | 'recentes'
-  | 'antigas'
-  | 'nome_az'
-  | 'nome_za'
-  | 'nota_maior'
-  | 'nota_menor';
+// Valores utilizados antes do carregamento dos dados reais
+const estatisticasIniciais: EstatisticasPerfil = {
+  totalSeries: 0,
+  assistindo: 0,
+  queroAssistir: 0,
+  pausadas: 0,
+  reassistindo: 0,
+  abandonadas: 0,
+  episodiosAssistidos: 0,
+};
 
-// Página acessada pela opção Minha lista do menu lateral
-export default function MinhaLista() {
+// Página responsável por apresentar os dados pessoais e estatísticas do usuário
+export default function Perfil() {
+  // Permite navegar pelas áreas relacionadas à conta
   const router = useRouter();
-  // Controla os avisos e erros com o mesmo design visual do Gabiflix
-  const [aviso, setAviso] = useState<{
-    titulo: string;
-    descricao: string;
-  } | null>(null);
 
-  function mostrarAviso(titulo: string, descricao: string) {
-    setAviso({ titulo, descricao });
-  }
+  // Guarda os dados básicos da conta autenticada
+  const [nomeUsuario, setNomeUsuario] = useState('Usuária');
+  const [emailUsuario, setEmailUsuario] = useState('');
+  const [nomePerfil, setNomePerfil] = useState('');
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [membroDesde, setMembroDesde] = useState('');
 
-  function fecharAviso() {
-    setAviso(null);
-  }
+  // Guarda os valores calculados a partir dos registros do Supabase
+  const [estatisticas, setEstatisticas] =
+    useState<EstatisticasPerfil>(estatisticasIniciais);
 
-  const [series, setSeries] = useState<ItemMinhaLista[]>([]);
+  // Controla os estados da consulta
   const [carregando, setCarregando] = useState(true);
   const [mensagemErro, setMensagemErro] = useState('');
-  // Permite repetir a consulta quando o carregamento da lista falhar
-  const [tentativaCarregamento, setTentativaCarregamento] = useState(0);
-  const [serieSelecionada, setSerieSelecionada] =
-    useState<ItemMinhaLista | null>(null);
+  const [modalSaidaVisivel, setModalSaidaVisivel] = useState(false);
+  const [erroSaida, setErroSaida] = useState<string | null>(null);
 
-  // Guarda a série escolhida enquanto o modal de remoção está aberto
-  const [serieParaRemover, setSerieParaRemover] =
-    useState<ItemMinhaLista | null>(null);
-
-  const [salvandoAcao, setSalvandoAcao] = useState(false);
-
-  // Controla qual grupo de séries será apresentado na página
-  const [filtroSelecionado, setFiltroSelecionado] =
-    useState<FiltroLista>('assistindo');
-
-  // Pesquisa pelo nome dentro da categoria selecionada.
-  const [textoBusca, setTextoBusca] = useState('');
-
-  // Controla a abertura do menu de ordenação
-  const [modalOrdenacaoVisivel, setModalOrdenacaoVisivel] =
-    useState(false);
-
-  // Guarda a forma escolhida para ordenar as séries
-  const [ordenacaoSelecionada, setOrdenacaoSelecionada] =
-    useState<OrdenacaoLista>('recentes');
-
-  // Nomes amigáveis exibidos no card e no menu
-  const nomesStatus: Record<StatusUsuario, string> = {
-    quero_assistir: 'Quero assistir',
-    assistindo: 'Assistindo',
-    pausada: 'Pausada',
-    finalizada: 'Finalizada',
-    abandonada: 'Abandonada',
-    reassistindo: 'Assistindo novamente',
-  };
-
-  // Opções exibidas na barra horizontal de filtros
-  const filtros: {
-    valor: FiltroLista;
-    titulo: string;
-  }[] = [
-    { valor: 'assistindo', titulo: 'Assistindo' },
-    { valor: 'quero_assistir', titulo: 'Quero assistir' },
-    { valor: 'pausada', titulo: 'Pausadas' },
-    { valor: 'finalizada', titulo: 'Finalizadas' },
-    { valor: 'abandonada', titulo: 'Abandonadas' },
-    { valor: 'reassistindo', titulo: 'Reassistindo' },
-  ];
-
-  // Quantidade de séries em cada categoria.
-  // O contador considera toda a lista, independentemente do texto pesquisado.
-  const contagemPorFiltro = useMemo(
-    () =>
-      filtros.reduce(
-        (acumulador, filtro) => {
-          acumulador[filtro.valor] = series.filter(
-            (item) => item.status_usuario === filtro.valor
-          ).length;
-          return acumulador;
-        },
-        {} as Record<FiltroLista, number>
-      ),
-    [series]
-  );
-
-  // Opções apresentadas no menu de ordenação
-  const opcoesOrdenacao: {
-    valor: OrdenacaoLista;
-    titulo: string;
-  }[] = [
-    { valor: 'recentes', titulo: 'Adicionadas recentemente' },
-    { valor: 'antigas', titulo: 'Adicionadas há mais tempo' },
-    { valor: 'nome_az', titulo: 'Nome A–Z' },
-    { valor: 'nome_za', titulo: 'Nome Z–A' },
-    { valor: 'nota_maior', titulo: 'Melhor avaliação' },
-    { valor: 'nota_menor', titulo: 'Pior avaliação' },
-  ];
-
-  // Normaliza textos para a busca funcionar mesmo sem acentos.
-  function normalizarTexto(valor: string) {
-    return valor
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .toLocaleLowerCase('pt-BR')
-      .trim();
+  // Calcula os números apresentados na página utilizando apenas dados reais
+  function calcularEstatisticas(
+    lista: ItemMinhaLista[],
+    totalEpisodiosAssistidos: number
+  ): EstatisticasPerfil {
+    return {
+      totalSeries: lista.length,
+      assistindo: lista.filter(
+        (item) => item.status_usuario === 'assistindo'
+      ).length,
+      queroAssistir: lista.filter(
+        (item) => item.status_usuario === 'quero_assistir'
+      ).length,
+      pausadas: lista.filter(
+        (item) => item.status_usuario === 'pausada'
+      ).length,
+      reassistindo: lista.filter(
+        (item) => item.status_usuario === 'reassistindo'
+      ).length,
+      abandonadas: lista.filter(
+        (item) => item.status_usuario === 'abandonada'
+      ).length,
+      episodiosAssistidos: totalEpisodiosAssistidos,
+    };
   }
 
-  const termoBusca = normalizarTexto(textoBusca);
+  // Converte a data da conta em um texto curto para o perfil
+  function formatarDataMembro(data: string | undefined): string {
+    if (!data) {
+      return 'Data não disponível';
+    }
 
-  // Filtragem e ordenação só são recalculadas quando algo relevante muda.
-  const seriesOrdenadas = useMemo(() => {
-    const filtradas = series.filter((item) => {
-      if (item.status_usuario !== filtroSelecionado) return false;
-      if (!termoBusca) return true;
-      return normalizarTexto(item.nome).includes(termoBusca);
+    const dataConta = new Date(data);
+
+    const texto = dataConta.toLocaleDateString('pt-BR', {
+      month: 'long',
+      year: 'numeric',
     });
 
-    return [...filtradas].sort((serieA, serieB) => {
-      switch (ordenacaoSelecionada) {
-        case 'antigas':
-          return new Date(serieA.criado_em).getTime() - new Date(serieB.criado_em).getTime();
-        case 'nome_az':
-          return serieA.nome.localeCompare(serieB.nome, 'pt-BR');
-        case 'nome_za':
-          return serieB.nome.localeCompare(serieA.nome, 'pt-BR');
-        case 'nota_maior':
-          return (serieB.nota ?? -1) - (serieA.nota ?? -1);
-        case 'nota_menor':
-          return (serieA.nota ?? Number.POSITIVE_INFINITY) - (serieB.nota ?? Number.POSITIVE_INFINITY);
-        case 'recentes':
-        default:
-          return new Date(serieB.criado_em).getTime() - new Date(serieA.criado_em).getTime();
-      }
-    });
-  }, [series, filtroSelecionado, termoBusca, ordenacaoSelecionada]);
-
-  // Altera o status no Supabase e atualiza o card sem recarregar a página
-  async function alterarStatus(status: StatusUsuario) {
-    if (!serieSelecionada || salvandoAcao) {
-      return;
-    }
-
-    if (serieSelecionada.status_usuario === status) {
-      setSerieSelecionada(null);
-      return;
-    }
-
-    try {
-      setSalvandoAcao(true);
-      await atualizarStatusSerie(serieSelecionada.serie_id, status);
-      setSeries((listaAtual) =>
-        listaAtual.map((item) =>
-          item.serie_id === serieSelecionada.serie_id
-            ? { ...item, status_usuario: status }
-            : item
-        )
-      );
-      setSerieSelecionada(null);
-    } catch (erro) {
-      console.log('Erro ao atualizar status:', erro);
-      mostrarAviso('Não foi possível alterar', 'Tente novamente.');
-    } finally {
-      setSalvandoAcao(false);
-    }
+    return texto.charAt(0).toUpperCase() + texto.slice(1);
   }
 
-  // Abre o modal personalizado antes da exclusão definitiva
-  function confirmarExclusao() {
-    if (!serieSelecionada || salvandoAcao) {
-      return;
-    }
-
-    // Fecha o menu inferior antes de mostrar a confirmação
-    setSerieParaRemover(serieSelecionada);
-    setSerieSelecionada(null);
-  }
-
-  // Fecha somente o modal de confirmação
-  function fecharModalRemocao() {
-    if (salvandoAcao) {
-      return;
-    }
-
-    setSerieParaRemover(null);
-  }
-
-  // Remove a série e todo o progresso somente depois da confirmação
-  async function removerSerieConfirmada() {
-    if (!serieParaRemover || salvandoAcao) {
-      return;
-    }
-
-    const serie = serieParaRemover;
-
-    try {
-      setSalvandoAcao(true);
-
-      await excluirSerieCompletamente(
-        serie.serie_id
-      );
-
-      setSeries((listaAtual) =>
-        listaAtual.filter(
-          (item) =>
-            item.serie_id !== serie.serie_id
-        )
-      );
-
-      setSerieParaRemover(null);
-    } catch (erro) {
-      console.log(
-        'Erro ao remover série:',
-        erro
-      );
-
-      mostrarAviso('Não foi possível remover', 'Tente novamente.');
-    } finally {
-      setSalvandoAcao(false);
-    }
-  }
-
-  // Carrega os registros sempre que o usuário entrar ou retornar à página
+  // Carrega novamente o perfil sempre que o usuário entrar ou retornar à página
   useFocusEffect(
     useCallback(() => {
       let paginaAtiva = true;
 
-      async function carregarLista() {
+      async function carregarPerfil() {
         try {
           setCarregando(true);
           setMensagemErro('');
-          const resultado = await buscarMinhaLista();
 
-          if (paginaAtiva) {
-            setSeries(resultado);
+          // Recupera a conta conectada
+          const {
+            data: dadosUsuario,
+            error: erroUsuario,
+          } = await supabase.auth.getUser();
+
+          if (erroUsuario || !dadosUsuario.user) {
+            throw new Error('Não foi possível carregar sua conta.');
           }
+
+          // Carrega a lista e apenas a contagem de episódios simultaneamente.
+          // O Perfil não precisa baixar milhares de registros do histórico para
+          // exibir somente a quantidade total de episódios assistidos.
+          const [lista, totalEpisodiosAssistidos] = await Promise.all([
+            buscarMinhaLista(),
+            contarEpisodiosAssistidos(),
+          ]);
+
+          if (!paginaAtiva) {
+            return;
+          }
+
+          const usuario = dadosUsuario.user;
+
+          // Prioriza o nome salvo nos metadados do cadastro
+          const nomeCadastrado = usuario.user_metadata?.nome;
+          const nomeDoEmail = usuario.email?.split('@')[0] ?? 'usuario';
+
+          const nomeExibicao =
+            typeof nomeCadastrado === 'string' && nomeCadastrado.trim()
+              ? nomeCadastrado.trim()
+              : nomeDoEmail;
+
+          // Recupera o avatar salvo nos metadados, quando existir
+          const imagemAvatar =
+            typeof usuario.user_metadata?.avatar_url === 'string'
+              ? usuario.user_metadata.avatar_url
+              : null;
+
+          setNomeUsuario(nomeExibicao);
+          setEmailUsuario(usuario.email ?? '');
+          setNomePerfil(nomeDoEmail);
+          setAvatarUrl(imagemAvatar);
+          setMembroDesde(formatarDataMembro(usuario.created_at));
+          setEstatisticas(
+            calcularEstatisticas(
+              lista,
+              totalEpisodiosAssistidos
+            )
+          );
         } catch (erro) {
-          console.log('Erro ao carregar Minha lista:', erro);
+          console.log('Erro ao carregar perfil:', erro);
 
           if (paginaAtiva) {
-            setMensagemErro('Não foi possível carregar sua lista.');
+            setEstatisticas(estatisticasIniciais);
+            setMensagemErro('Não foi possível carregar seu perfil.');
           }
         } finally {
           if (paginaAtiva) {
@@ -304,126 +193,71 @@ export default function MinhaLista() {
         }
       }
 
-      carregarLista();
+      carregarPerfil();
 
       return () => {
         paginaAtiva = false;
       };
-    }, [tentativaCarregamento])
+    }, [])
   );
 
-  // Cria um card horizontal para cada registro retornado pelo Supabase
-  function renderizarSerie(item: ItemMinhaLista) {
-    const urlCapa = obterUrlCapaPequena(item.poster_path);
+  // Abre o modal personalizado do Gabiflix.
+  function confirmarSaida() {
+    setModalSaidaVisivel(true);
+  }
 
+  // Encerra a sessão somente depois que a pessoa toca em "Sair".
+  async function sairDaConta() {
+    try {
+      const { error } = await supabase.auth.signOut();
+
+      if (error) {
+        setModalSaidaVisivel(false);
+        setErroSaida('Tente novamente.');
+        return;
+      }
+
+      setModalSaidaVisivel(false);
+      router.replace('/');
+    } catch {
+      setModalSaidaVisivel(false);
+      setErroSaida('Tente novamente.');
+    }
+  }
+
+  // Exibe um estado centralizado enquanto os dados são preparados
+  if (carregando) {
     return (
-      <TouchableOpacity
-        key={item.id}
-        style={styles.card}
-        activeOpacity={0.82}
-        onPress={() =>
-          router.push({
-            pathname: '/serie/[id]',
-            params: {
-              id: String(item.serie_id),
-            },
-          })
-        }
+      <View style={styles.estadoCentralizado}>
+        <ActivityIndicator size="large" color="#E91E63" />
+        <Text style={styles.textoEstado}>Carregando seu perfil...</Text>
+      </View>
+    );
+  }
+
+  // Exibe uma mensagem quando não for possível consultar os dados
+  if (mensagemErro) {
+    return (
+      <SafeAreaView
+        style={styles.estadoCentralizado}
+        edges={['top', 'bottom']}
       >
-        {/* Exibe a capa ou um estado visual quando a imagem não estiver disponível */}
-        {urlCapa ? (
-          <Image
-            source={{ uri: urlCapa }}
-            style={styles.capa}
-            resizeMode="cover"
-          />
-        ) : (
-          <View style={styles.semCapa}>
-            <Ionicons
-              name="image-outline"
-              size={30}
-              color="#777777"
-            />
-          </View>
-        )}
+        <Ionicons
+          name="alert-circle-outline"
+          size={44}
+          color="#F48FB1"
+        />
 
-        {/* Agrupa as informações principais da série */}
-        <View style={styles.conteudoCard}>
-          <View style={styles.topoCard}>
-            <View style={styles.areaTituloCard}>
-              <Text
-                style={styles.nomeSerie}
-                numberOfLines={2}
-              >
-                {item.nome}
-              </Text>
+        <Text style={styles.textoErro}>{mensagemErro}</Text>
 
-              {/* Status escolhido pelo usuário para organizar a lista */}
-              <View style={styles.statusContainer}>
-                <View style={styles.pontoStatus} />
-
-                <Text style={styles.statusUsuario}>
-                  {nomesStatus[item.status_usuario] ??
-                    'Quero assistir'}
-                </Text>
-              </View>
-            </View>
-
-            {/* Abre o menu de organização da série */}
-            <TouchableOpacity
-              style={styles.botaoMenu}
-              activeOpacity={0.7}
-              onPress={(evento) => {
-                evento.stopPropagation();
-                setSerieSelecionada(item);
-              }}
-            >
-              <Ionicons
-                name="ellipsis-horizontal"
-                size={21}
-                color="#FFFFFF"
-              />
-            </TouchableOpacity>
-          </View>
-
-          {/* Ano e avaliação recebidos dos dados já salvos */}
-          <View style={styles.informacoes}>
-            <Text style={styles.ano}>
-              {item.ano || '—'}
-            </Text>
-
-            <View style={styles.separadorInformacoes} />
-
-            <View style={styles.avaliacao}>
-              <Ionicons
-                name="star"
-                size={13}
-                color="#E91E63"
-              />
-
-              <Text style={styles.nota}>
-                {item.nota !== null &&
-                Number(item.nota) > 0
-                  ? Number(item.nota).toFixed(1)
-                  : '—'}
-              </Text>
-            </View>
-          </View>
-
-          {/* Indica que o card pode ser aberto para acessar detalhes e episódios */}
-          <View style={styles.rodapeCard}>
-            <Text style={styles.textoAbrir}>
-              Ver detalhes
-            </Text>
-
-            <Ionicons
-              name="chevron-forward"
-              size={16}
-              color="#E91E63"
-            />
-          </View>
-        </View>
-      </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.botaoVoltarErro}
+          activeOpacity={0.8}
+          onPress={() => router.replace('/inicio')}
+        >
+          <Text style={styles.textoBotaoVoltarErro}>Voltar</Text>
+        </TouchableOpacity>
+      </SafeAreaView>
     );
   }
 
@@ -432,508 +266,227 @@ export default function MinhaLista() {
       {/* Cabeçalho da página */}
       <View style={styles.cabecalho}>
         <TouchableOpacity
-          style={styles.botaoVoltar}
+          style={styles.botaoCabecalho}
           activeOpacity={0.7}
-          onPress={voltarOuInicio}
+          onPress={() => router.replace('/inicio')}
+          accessibilityLabel="Voltar"
         >
           <Ionicons name="chevron-back" size={26} color="#E91E63" />
         </TouchableOpacity>
 
-        <View style={styles.titulos}>
-          <Text style={styles.titulo}>Minha lista</Text>
-          <Text style={styles.subtitulo}>
-            {series.length} {series.length === 1 ? 'série salva' : 'séries salvas'}
-          </Text>
-        </View>
+        <Text style={styles.tituloCabecalho}>Perfil</Text>
 
-        {/* Abre o menu responsável por ordenar as séries */}
-        {!carregando && !mensagemErro && series.length > 0 ? (
-          <TouchableOpacity
-            style={styles.botaoOrdenar}
-            activeOpacity={0.7}
-            onPress={() => setModalOrdenacaoVisivel(true)}
-            accessibilityLabel="Ordenar séries"
-          >
-            <Ionicons
-              name="swap-vertical-outline"
-              size={23}
-              color="#E91E63"
-            />
-          </TouchableOpacity>
-        ) : (
-          // Mantém o título centralizado mesmo quando não existe ordenação disponível
-          <View style={styles.espacoCabecalho} />
-        )}
+        {/* Engrenagem que abre a página própria de configurações */}
+        <TouchableOpacity
+          style={styles.botaoCabecalho}
+          activeOpacity={0.7}
+          onPress={() => router.push('/configuracoes')}
+          accessibilityLabel="Configurações"
+        >
+          <Ionicons name="settings-outline" size={22} color="#E91E63" />
+        </TouchableOpacity>
       </View>
 
-      {/* Busca somente entre as séries já salvas na Minha lista */}
-      {!carregando && !mensagemErro && series.length > 0 && (
-        <View style={styles.areaBusca}>
-          <View style={styles.campoBusca}>
-            <Ionicons
-              name="search-outline"
-              size={19}
-              color="#8D8D8D"
-            />
-
-            <TextInput
-              style={styles.inputBusca}
-              value={textoBusca}
-              onChangeText={setTextoBusca}
-              placeholder="Buscar nesta categoria..."
-              placeholderTextColor="#6F6F6F"
-              selectionColor="#E91E63"
-              returnKeyType="search"
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-
-            {textoBusca.length > 0 && (
-              <TouchableOpacity
-                style={styles.botaoLimparBusca}
-                activeOpacity={0.7}
-                onPress={() => setTextoBusca('')}
-                accessibilityLabel="Limpar busca"
-              >
-                <Ionicons
-                  name="close-circle"
-                  size={19}
-                  color="#777777"
-                />
-              </TouchableOpacity>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.conteudo}
+      >
+        {/* Área principal com avatar e identificação da conta */}
+        <View style={styles.perfilPrincipal}>
+          <View style={styles.bordaAvatar}>
+            {avatarUrl ? (
+              <Image
+                source={{ uri: avatarUrl }}
+                style={styles.avatarImagem}
+                resizeMode="cover"
+              />
+            ) : (
+              <View style={styles.avatarPadrao}>
+                <Text style={styles.inicialAvatar}>
+                  {nomeUsuario.charAt(0).toUpperCase()}
+                </Text>
+              </View>
             )}
           </View>
-        </View>
-      )}
 
-      {/* Filtros utilizados para organizar visualmente as séries da lista */}
-      {!carregando && !mensagemErro && series.length > 0 && (
-        <View style={styles.areaFiltros}>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.listaFiltros}
-          >
-            {filtros.map((filtro) => {
-              const selecionado =
-                filtroSelecionado === filtro.valor;
+          <Text style={styles.nomeUsuario}>{nomeUsuario} 💕</Text>
+          <Text style={styles.nomePerfil}>@{nomePerfil}</Text>
 
-              return (
-                <TouchableOpacity
-                  key={filtro.valor}
-                  style={[
-                    styles.filtro,
-                    selecionado && styles.filtroAtivo,
-                  ]}
-                  activeOpacity={0.8}
-                  onPress={() => {
-                    setFiltroSelecionado(filtro.valor);
-                    setTextoBusca('');
-                  }}
-                >
-                  <Text
-                    style={[
-                      styles.textoFiltro,
-                      selecionado &&
-                        styles.textoFiltroAtivo,
-                    ]}
-                  >
-                    {filtro.titulo}
-                  </Text>
+          {emailUsuario ? (
+            <Text style={styles.email}>{emailUsuario}</Text>
+          ) : null}
 
-                  <View
-                    style={[
-                      styles.contadorFiltro,
-                      selecionado &&
-                        styles.contadorFiltroAtivo,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.textoContadorFiltro,
-                        selecionado &&
-                          styles.textoContadorFiltroAtivo,
-                      ]}
-                    >
-                      {contagemPorFiltro[filtro.valor]}
-                    </Text>
-                  </View>
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
-        </View>
-      )}
-
-      {/* Carregamento, erro ou lista de séries */}
-      {carregando ? (
-        <View style={styles.estadoCentralizado}>
-          <ActivityIndicator
-            size="large"
-            color="#E91E63"
-          />
-
-          <Text style={styles.textoEstado}>
-            Carregando sua lista...
-          </Text>
-        </View>
-      ) : mensagemErro ? (
-        <View style={styles.estadoCentralizado}>
-          <Ionicons
-            name="alert-circle-outline"
-            size={42}
-            color="#F48FB1"
-          />
-
-          <Text style={styles.textoErro}>
-            {mensagemErro}
-          </Text>
-
-          {/* Repete a consulta ao Supabase sem precisar sair da página */}
-          <TouchableOpacity
-            style={{
-              marginTop: 18,
-              minHeight: 42,
-              paddingHorizontal: 20,
-              borderRadius: 22,
-              borderWidth: 1,
-              borderColor: '#E91E63',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-            activeOpacity={0.8}
-            onPress={() =>
-              setTentativaCarregamento((valorAtual) => valorAtual + 1)
-            }
-          >
-            <Text
-              style={{
-                color: '#E91E63',
-                fontFamily: 'Poppins_600SemiBold',
-                fontSize: 12,
-              }}
-            >
-              Tentar novamente
+          <View style={styles.seloMembro}>
+            <Text style={styles.textoSeloMembro}>
+              Membro desde {membroDesde}
             </Text>
+          </View>
+        </View>
+
+        {/* Resumo rápido inspirado na referência visual */}
+        <View style={styles.resumoRapido}>
+          <View style={styles.itemResumo}>
+            <Text style={styles.numeroResumo}>{estatisticas.assistindo}</Text>
+            <Text style={styles.textoResumo}>Assistindo</Text>
+          </View>
+
+          <View style={styles.divisorResumo} />
+
+          <View style={styles.itemResumo}>
+            <Text style={styles.numeroResumo}>
+              {estatisticas.queroAssistir}
+            </Text>
+            <Text style={styles.textoResumo}>Quero assistir</Text>
+          </View>
+
+
+        </View>
+
+        {/* Cabeçalho da área de estatísticas */}
+        <View style={styles.cabecalhoEstatisticas}>
+          <Text style={styles.tituloSecao}>Estatísticas</Text>
+        </View>
+
+        {/* Cards calculados com informações reais já disponíveis no Supabase */}
+        <View style={styles.gradeEstatisticas}>
+          <View style={styles.cardEstatistica}>
+            <View style={styles.iconeEstatistica}>
+              <Ionicons name="tv-outline" size={20} color="#E91E63" />
+            </View>
+            <Text style={styles.rotuloEstatistica}>Séries</Text>
+            <Text style={styles.valorEstatistica}>
+              {estatisticas.totalSeries}
+            </Text>
+          </View>
+
+          <View style={styles.cardEstatistica}>
+            <View style={styles.iconeEstatistica}>
+              <Ionicons
+                name="checkmark-circle-outline"
+                size={20}
+                color="#E91E63"
+              />
+            </View>
+            <Text style={styles.rotuloEstatistica}>Episódios</Text>
+            <Text style={styles.valorEstatistica}>
+              {estatisticas.episodiosAssistidos}
+            </Text>
+          </View>
+
+          <View style={styles.cardEstatistica}>
+            <View style={styles.iconeEstatistica}>
+              <Ionicons
+                name="pause-circle-outline"
+                size={20}
+                color="#E91E63"
+              />
+            </View>
+            <Text style={styles.rotuloEstatistica}>Pausadas</Text>
+            <Text style={styles.valorEstatistica}>
+              {estatisticas.pausadas}
+            </Text>
+          </View>
+
+          <View style={styles.cardEstatistica}>
+            <View style={styles.iconeEstatistica}>
+              <Ionicons name="refresh-outline" size={20} color="#E91E63" />
+            </View>
+            <Text style={styles.rotuloEstatistica}>Reassistindo</Text>
+            <Text style={styles.valorEstatistica}>
+              {estatisticas.reassistindo}
+            </Text>
+          </View>
+        </View>
+
+        {/* Informação complementar sem ocupar os cards principais */}
+        <View style={styles.cardSecundario}>
+          <View style={styles.cardSecundarioEsquerda}>
+            <Ionicons
+              name="close-circle-outline"
+              size={20}
+              color="#F48FB1"
+            />
+            <Text style={styles.textoCardSecundario}>
+              Séries abandonadas
+            </Text>
+          </View>
+
+          <Text style={styles.valorCardSecundario}>
+            {estatisticas.abandonadas}
+          </Text>
+        </View>
+
+        {/* Atalhos relacionados à atividade do usuário e à conta */}
+        <View style={styles.acoesConta}>
+          <TouchableOpacity
+            style={styles.botaoConta}
+            activeOpacity={0.8}
+            onPress={() => router.push('/historico-episodios')}
+          >
+            <Ionicons
+              name="time-outline"
+              size={21}
+              color="#F48FB1"
+            />
+
+            <Text style={styles.textoBotaoConta}>
+              Histórico de episódios
+            </Text>
+
+            <Ionicons
+              name="chevron-forward"
+              size={19}
+              color="#666666"
+            />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.botaoConta, styles.botaoSair]}
+            activeOpacity={0.8}
+            onPress={confirmarSaida}
+          >
+            <Ionicons
+              name="log-out-outline"
+              size={21}
+              color="#FF6B81"
+            />
+            <Text style={styles.textoBotaoSair}>Sair da conta</Text>
           </TouchableOpacity>
         </View>
-      ) : series.length === 0 ? (
-        <View style={styles.estadoCentralizado}>
-          <View style={styles.estadoVazio}>
-            <Ionicons
-              name="heart-outline"
-              size={52}
-              color="#E91E63"
-            />
+      </ScrollView>
 
-            <Text style={styles.tituloVazio}>
-              Sua lista está vazia
-            </Text>
-
-            <Text style={styles.textoVazio}>
-              Explore o catálogo e adicione as séries que você quer acompanhar.
-            </Text>
-
-            {/* Leva o usuário diretamente para o Explorar para descobrir séries */}
-            <TouchableOpacity
-              style={styles.botaoExplorar}
-              activeOpacity={0.8}
-              onPress={() => router.push('/busca')}
-            >
-              <Ionicons
-                name="search-outline"
-                size={18}
-                color="#FFFFFF"
-              />
-
-              <Text style={styles.textoBotaoExplorar}>
-                Explorar catálogo
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      ) : seriesOrdenadas.length === 0 ? (
-        <View style={styles.estadoCentralizado}>
-          <View style={styles.estadoVazio}>
-            <Ionicons
-              name="albums-outline"
-              size={48}
-              color="#E91E63"
-            />
-
-            <Text style={styles.tituloVazio}>
-              {termoBusca
-                ? 'Nenhuma série encontrada'
-                : 'Nenhuma série nesta categoria'}
-            </Text>
-
-            <Text style={styles.textoVazio}>
-              {termoBusca
-                ? `Não encontramos “${textoBusca.trim()}” nesta categoria.`
-                : 'Altere o status de uma série ou escolha outro filtro.'}
-            </Text>
-
-            {termoBusca && (
-              <TouchableOpacity
-                style={styles.botaoLimparResultado}
-                activeOpacity={0.8}
-                onPress={() => setTextoBusca('')}
-              >
-                <Text style={styles.textoLimparResultado}>
-                  Limpar busca
-                </Text>
-              </TouchableOpacity>
-            )}
-          </View>
-        </View>
-      ) : (
-        <FlatList
-          data={seriesOrdenadas}
-          keyExtractor={(item) => String(item.id)}
-          renderItem={({ item }) => renderizarSerie(item)}
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={styles.lista}
-          initialNumToRender={6}
-          maxToRenderPerBatch={6}
-          windowSize={7}
-          removeClippedSubviews
-        />
-      )}
-
-      {/* Menu inferior utilizado para escolher a ordenação da lista */}
-      <Modal
-        visible={modalOrdenacaoVisivel}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setModalOrdenacaoVisivel(false)}
-      >
-        <Pressable
-          style={styles.fundoModal}
-          onPress={() => setModalOrdenacaoVisivel(false)}
-        >
-          <Pressable
-            style={styles.menuOrdenacao}
-            onPress={() => {}}
-          >
-            <View style={styles.cabecalhoMenu}>
-              <Text style={styles.tituloMenu}>
-                Ordenar por
-              </Text>
-
-              <TouchableOpacity
-                onPress={() =>
-                  setModalOrdenacaoVisivel(false)
-                }
-              >
-                <Ionicons
-                  name="close"
-                  size={25}
-                  color="#FFFFFF"
-                />
-              </TouchableOpacity>
-            </View>
-
-            {/* Cada opção altera somente a ordem visual da lista */}
-            {opcoesOrdenacao.map((opcao) => {
-              const selecionada =
-                ordenacaoSelecionada === opcao.valor;
-
-              return (
-                <TouchableOpacity
-                  key={opcao.valor}
-                  style={styles.itemOrdenacao}
-                  activeOpacity={0.75}
-                  onPress={() => {
-                    setOrdenacaoSelecionada(opcao.valor);
-                    setModalOrdenacaoVisivel(false);
-                  }}
-                >
-                  <View
-                    style={[
-                      styles.radioOrdenacao,
-                      selecionada &&
-                        styles.radioOrdenacaoAtivo,
-                    ]}
-                  >
-                    {selecionada && (
-                      <View
-                        style={
-                          styles.radioOrdenacaoCentro
-                        }
-                      />
-                    )}
-                  </View>
-
-                  <Text
-                    style={[
-                      styles.textoItemOrdenacao,
-                      selecionada &&
-                        styles.textoItemOrdenacaoAtivo,
-                    ]}
-                  >
-                    {opcao.titulo}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </Pressable>
-        </Pressable>
-      </Modal>
-
-      {/* Menu inferior com as ações disponíveis para a série */}
-      <Modal
-        visible={serieSelecionada !== null}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setSerieSelecionada(null)}
-      >
-        <Pressable
-          style={styles.fundoModal}
-          onPress={() => setSerieSelecionada(null)}
-        >
-          <Pressable style={styles.menuAcoes} onPress={() => {}}>
-            <View style={styles.cabecalhoMenu}>
-              <Text style={styles.tituloMenu} numberOfLines={1}>
-                {serieSelecionada?.nome}
-              </Text>
-              <TouchableOpacity onPress={() => setSerieSelecionada(null)}>
-                <Ionicons name="close" size={25} color="#FFFFFF" />
-              </TouchableOpacity>
-            </View>
-
-            {(
-              [
-                {
-                  status: 'quero_assistir',
-                  icone: 'bookmark-outline',
-                  titulo: 'Quero assistir',
-                },
-                {
-                  status: 'assistindo',
-                  icone: 'play-circle-outline',
-                  titulo: 'Continuar assistindo',
-                },
-                {
-                  status: 'pausada',
-                  icone: 'pause-circle-outline',
-                  titulo: 'Pausar série',
-                },
-                {
-                  status: 'finalizada',
-                  icone: 'checkmark-circle-outline',
-                  titulo: 'Finalizar série',
-                },
-                {
-                  status: 'abandonada',
-                  icone: 'close-circle-outline',
-                  titulo: 'Abandonar série',
-                },
-                {
-                  status: 'reassistindo',
-                  icone: 'refresh-outline',
-                  titulo: 'Assistir novamente',
-                },
-              ] as {
-                status: StatusUsuario;
-                icone:
-                  | 'bookmark-outline'
-                  | 'play-circle-outline'
-                  | 'pause-circle-outline'
-                  | 'checkmark-circle-outline'
-                  | 'close-circle-outline'
-                  | 'refresh-outline';
-                titulo: string;
-              }[]
-            )
-              .filter(
-                (acao) =>
-                  acao.status !==
-                  serieSelecionada?.status_usuario
-              )
-              .map((acao) => (
-                <TouchableOpacity
-                  key={acao.status}
-                  style={styles.itemMenu}
-                  activeOpacity={0.75}
-                  disabled={salvandoAcao}
-                  onPress={() =>
-                    alterarStatus(acao.status)
-                  }
-                >
-                  <Ionicons
-                    name={acao.icone}
-                    size={21}
-                    color="#F48FB1"
-                  />
-
-                  <Text style={styles.textoItemMenu}>
-                    {acao.titulo}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-
-            <TouchableOpacity
-              style={[
-                styles.itemMenu,
-                styles.itemExcluir,
-              ]}
-              activeOpacity={0.75}
-              disabled={salvandoAcao}
-              onPress={confirmarExclusao}
-            >
-              <Ionicons name="trash-outline" size={21} color="#FF6B81" />
-              <Text style={styles.textoExcluir}>Remover completamente</Text>
-            </TouchableOpacity>
-
-            {salvandoAcao && (
-              <ActivityIndicator style={styles.carregandoMenu} color="#E91E63" />
-            )}
-          </Pressable>
-        </Pressable>
-      </Modal>
-
-      {/* Confirmação personalizada para remover a série e todo o progresso */}
       <ModalConfirmacao
-        visivel={Boolean(serieParaRemover)}
-        titulo="Remover completamente?"
-        descricao={
-          serieParaRemover
-            ? `Todo o progresso de ${serieParaRemover.nome} será apagado. Essa ação não pode ser desfeita.`
-            : ''
-        }
-        onFechar={fecharModalRemocao}
+        visivel={modalSaidaVisivel}
+        titulo="Sair do Gabiflix?"
+        descricao="Você precisará entrar novamente para acessar sua conta."
+        onFechar={() => setModalSaidaVisivel(false)}
         acoes={[
-          {
-            texto: salvandoAcao
-              ? 'Removendo...'
-              : 'Remover',
-            tipo: 'principal',
-            onPress:
-              removerSerieConfirmada,
-          },
           {
             texto: 'Cancelar',
             tipo: 'cancelar',
-            onPress:
-              fecharModalRemocao,
+            onPress: () => setModalSaidaVisivel(false),
+          },
+          {
+            texto: 'Sair',
+            tipo: 'principal',
+            onPress: sairDaConta,
           },
         ]}
       />
-    
-      {/* Avisos e erros seguem o mesmo padrão visual das confirmações */}
+
       <ModalConfirmacao
-        visivel={Boolean(aviso)}
-        titulo={aviso?.titulo ?? ''}
-        descricao={aviso?.descricao ?? ''}
-        onFechar={fecharAviso}
+        visivel={Boolean(erroSaida)}
+        titulo="Não foi possível sair"
+        descricao={erroSaida ?? ''}
+        onFechar={() => setErroSaida(null)}
         acoes={[
           {
             texto: 'Entendi',
             tipo: 'principal',
-            onPress: fecharAviso,
+            onPress: () => setErroSaida(null),
           },
         ]}
       />
-</SafeAreaView>
+    </SafeAreaView>
   );
 }

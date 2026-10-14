@@ -1,7 +1,7 @@
 // PÁGINA QUE EXIBE AS SÉRIES SALVAS PELO USUÁRIO
 
 // Hooks utilizados para carregar novamente a lista ao retornar para a página
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 // Componentes visuais do React Native
 import {
   ActivityIndicator,
@@ -23,6 +23,7 @@ import { voltarOuInicio } from '../utils/navegacao';
 // Mantém o conteúdo distante das barras do aparelho
 import { SafeAreaView } from 'react-native-safe-area-context';
 // Recupera os registros salvos no Supabase
+import { sincronizarFinalizadasDaLista } from '../services/finalizacao-serie.service';
 import {
   atualizarStatusSerie,
   buscarMinhaLista,
@@ -59,6 +60,11 @@ type OrdenacaoLista =
 // Página acessada pela opção Minha lista do menu lateral
 export default function MinhaLista() {
   const router = useRouter();
+
+  // Controla somente o carregamento inicial da página.
+  // Ao voltar dos detalhes de uma série, não desmontamos a FlatList;
+  // assim o React Native mantém naturalmente a posição exata da rolagem.
+  const primeiraCargaRef = useRef(true);
   // Controla os avisos e erros com o mesmo design visual do Gabiflix
   const [aviso, setAviso] = useState<{
     titulo: string;
@@ -165,6 +171,17 @@ export default function MinhaLista() {
 
   const termoBusca = normalizarTexto(textoBusca);
 
+  function compararInclusao(a: ItemMinhaLista, b: ItemMinhaLista): number {
+    const dataA = Date.parse(a.criado_em);
+    const dataB = Date.parse(b.criado_em);
+    if (Number.isFinite(dataA) && Number.isFinite(dataB)) {
+      const diferenca = dataA - dataB;
+      if (diferenca !== 0) return diferenca;
+    }
+    // Datas iguais ou ausentes: o ID crescente preserva a ordem de inclusão.
+    return Number(a.id) - Number(b.id);
+  }
+
   // Filtragem e ordenação só são recalculadas quando algo relevante muda.
   const seriesOrdenadas = useMemo(() => {
     const filtradas = series.filter((item) => {
@@ -176,7 +193,7 @@ export default function MinhaLista() {
     return [...filtradas].sort((serieA, serieB) => {
       switch (ordenacaoSelecionada) {
         case 'antigas':
-          return new Date(serieA.criado_em).getTime() - new Date(serieB.criado_em).getTime();
+          return compararInclusao(serieA, serieB);
         case 'nome_az':
           return serieA.nome.localeCompare(serieB.nome, 'pt-BR');
         case 'nome_za':
@@ -187,7 +204,7 @@ export default function MinhaLista() {
           return (serieA.nota ?? Number.POSITIVE_INFINITY) - (serieB.nota ?? Number.POSITIVE_INFINITY);
         case 'recentes':
         default:
-          return new Date(serieB.criado_em).getTime() - new Date(serieA.criado_em).getTime();
+          return compararInclusao(serieB, serieA);
       }
     });
   }, [series, filtroSelecionado, termoBusca, ordenacaoSelecionada]);
@@ -277,19 +294,36 @@ export default function MinhaLista() {
     }
   }
 
-  // Carrega os registros sempre que o usuário entrar ou retornar à página
+  // Carrega os registros quando a página recebe foco.
+  // IMPORTANTE: a tela de carregamento aparece somente na primeira entrada
+  // (ou quando ainda não há dados). Ao voltar de /serie/[id], a FlatList
+  // continua montada enquanto os dados são atualizados em segundo plano.
+  // Isso preserva a categoria, a ordenação e principalmente a posição da rolagem.
   useFocusEffect(
     useCallback(() => {
       let paginaAtiva = true;
 
       async function carregarLista() {
+        const mostrarCarregamento = primeiraCargaRef.current;
+
         try {
-          setCarregando(true);
+          if (mostrarCarregamento) {
+            setCarregando(true);
+          }
+
           setMensagemErro('');
-          const resultado = await buscarMinhaLista();
+          const resultado = await buscarMinhaLista(true);
 
           if (paginaAtiva) {
             setSeries(resultado);
+            // Corrige também séries cujo progresso foi marcado antes desta versão.
+            void sincronizarFinalizadasDaLista(
+              resultado,
+              (idSerie) => setSeries((atual) => atual.map((item) =>
+                item.serie_id === idSerie ? { ...item, status_usuario: 'finalizada' } : item
+              )),
+              () => paginaAtiva
+            ).catch((erro) => console.log('Erro ao conferir finalizações:', erro));
           }
         } catch (erro) {
           console.log('Erro ao carregar Minha lista:', erro);
@@ -299,6 +333,9 @@ export default function MinhaLista() {
           }
         } finally {
           if (paginaAtiva) {
+            // Depois da primeira consulta, nunca substituímos a FlatList pela
+            // tela de loading apenas porque o usuário abriu e voltou de detalhes.
+            primeiraCargaRef.current = false;
             setCarregando(false);
           }
         }

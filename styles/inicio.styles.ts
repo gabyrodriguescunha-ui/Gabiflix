@@ -106,6 +106,19 @@ export const styles = StyleSheet.create({
     marginTop: 2,
   },
 
+  infoEpisodioContinuar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+
+  episodiosRestantesContinuar: {
+    color: '#BDBDBD',
+    fontFamily: 'Poppins_500Medium',
+    fontSize: 10,
+    marginTop: 2,
+    marginLeft: 9,
+  },
+
 
   linhaEpisodioContinuar: {
     minHeight: 29,
@@ -333,7 +346,7 @@ botaoAssistidoHomeAtivo: {
     position: 'absolute',
     left: 18,
     right: 18,
-    bottom: 84,
+    bottom: 5,
     minHeight: 62,
     flexDirection: 'row',
     alignItems: 'center',
